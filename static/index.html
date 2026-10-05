@@ -64,6 +64,15 @@ td input.metric.need { border-color: var(--accent); }
 .fetching { color: var(--accent); font-size: 12px; }
 .muted { color: var(--muted); }
 .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--text); }
+th.sorted { color: var(--accent); }
+th.sorted::after { content: " ↓"; }
+th.sorted.asc::after { content: " ↑"; }
+td.rank { color: var(--muted); font-size: 12px; width: 1%; }
+.sortbar { margin-bottom: 10px; }
+.sortbar button { padding: 4px 10px; border-radius: 999px; font-size: 12.5px; }
+.sortbar button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 nav.tabs { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
 nav.tabs a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 7px; font-weight: 500; }
 nav.tabs a.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
@@ -128,11 +137,24 @@ td input.note { width: 170px; text-align: left; }
 
   <section class="card">
     <h2>2 · Posts</h2>
+    <div class="row sortbar" id="sortbar">
+      <span class="muted" style="font-size:12.5px">Sort:</span>
+      <button data-preset="views">Most viral</button>
+      <button data-preset="eng">Most engaged</button>
+      <button data-preset="er">Best ER</button>
+      <button data-preset="cpm">Cheapest CPM</button>
+      <button data-preset="cpe">Cheapest engagement</button>
+      <button data-preset="budget">Most expensive</button>
+      <button data-preset="day">By date</button>
+      <span class="hint" style="margin:0">or click any column header</span>
+    </div>
     <div class="table-wrap">
       <table>
-        <thead><tr>
-          <th class="l">Post</th><th class="l">Note</th><th class="l">Day</th><th>Cost $</th><th>Views</th><th>Likes</th><th>Reposts</th><th>Quotes</th>
-          <th>Replies</th><th>Bookm.</th><th>Engag.</th><th>ER</th><th>CPM</th><th>CPE</th><th></th>
+        <thead id="postsHead"><tr>
+          <th class="l">#</th><th class="l" data-sort="author">Post</th><th class="l" data-sort="note">Note</th><th class="l" data-sort="day">Day</th>
+          <th data-sort="budget">Cost $</th><th data-sort="views">Views</th><th data-sort="likes">Likes</th><th data-sort="retweets">Reposts</th>
+          <th data-sort="quotes">Quotes</th><th data-sort="replies">Replies</th><th data-sort="bookmarks">Bookm.</th><th data-sort="eng">Engag.</th>
+          <th data-sort="er">ER</th><th data-sort="cpm">CPM</th><th data-sort="cpe">CPE</th><th></th>
         </tr></thead>
         <tbody id="postsBody"></tbody>
         <tfoot id="postsFoot"></tfoot>
@@ -245,6 +267,30 @@ function metricCell(p, m) {
   return `<td><input type="number" min="0" class="metric${need}" value="${p[m] || ""}" placeholder="—" title="Type ${METRIC_HINT[m] || m} (not public on ${PLAT[p.platform]})" data-post="${p.id}" data-f="${m}"></td>`;
 }
 
+// Posts table sorting. Values that don't exist yet (e.g. ER without views) always sort last.
+const SORT_KEYS = {
+  author: (p) => (p.author || "").toLowerCase(), note: (p) => (p.note || "").toLowerCase(), day: (p) => p.day || "",
+  budget: (p) => p.budget || 0, eng: (p) => eng(p),
+  er: (p) => div(eng(p), p.views), cpm: (p) => (p.budget ? div(p.budget * 1000, p.views) : null), cpe: (p) => (p.budget ? div(p.budget, eng(p)) : null),
+  ...Object.fromEntries(["views", ...ENG].map((m) => [m, (p) => p[m] || 0])),
+};
+const LOW_FIRST = new Set(["author", "note", "day", "cpm", "cpe"]);   // first click sorts these ascending
+let postSort = { key: "day", dir: "asc" };
+try { postSort = JSON.parse(localStorage.getItem("xca_sort")) || postSort; } catch (e) {}
+function setSort(key, dir) {
+  postSort = { key, dir: dir || (postSort.key === key ? (postSort.dir === "asc" ? "desc" : "asc") : LOW_FIRST.has(key) ? "asc" : "desc") };
+  try { localStorage.setItem("xca_sort", JSON.stringify(postSort)); } catch (e) {}
+  render();
+}
+function sortedPosts(P) {
+  const f = SORT_KEYS[postSort.key] || SORT_KEYS.day, m = postSort.dir === "asc" ? 1 : -1;
+  return [...P].map((p, i) => [p, f(p), i]).sort(([, a, i], [, b, j]) => {
+    const na = a == null || (typeof a === "number" && !isFinite(a)), nb = b == null || (typeof b === "number" && !isFinite(b));
+    if (na || nb) return na === nb ? i - j : na ? 1 : -1;
+    return (a < b ? -1 : a > b ? 1 : i - j) * m;
+  }).map(([p]) => p);
+}
+
 function aggregateDays() {
   const m = {};
   const row = (d) => (m[d] ||= { day: d, posts: 0, spend: 0, spendV: 0, views: 0, eng: 0, engV: 0, reg: 0, api: 0, hasEntry: false });
@@ -295,9 +341,17 @@ function render() {
   ].join("");
 
   // Posts table
-  $("postsBody").innerHTML = P.length ? P.map((p) => {
+  document.querySelectorAll("#postsHead th[data-sort]").forEach((th) => {
+    th.classList.toggle("sorted", th.dataset.sort === postSort.key);
+    th.classList.toggle("asc", th.dataset.sort === postSort.key && postSort.dir === "asc");
+  });
+  const PRESET_DIR = { views: "desc", eng: "desc", er: "desc", cpm: "asc", cpe: "asc", budget: "desc", day: "asc" };
+  document.querySelectorAll("#sortbar button").forEach((b) => b.classList.toggle("on",
+    b.dataset.preset === postSort.key && PRESET_DIR[b.dataset.preset] === postSort.dir));
+  $("postsBody").innerHTML = P.length ? sortedPosts(P).map((p, i) => {
     const e = eng(p);
     return `<tr>
+      <td class="rank l">${i + 1}</td>
       <td class="post-cell l"><span class="badge">${PLAT[p.platform || "x"]}</span><a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || "…")}</a>
         <div class="t" title="${esc(p.text)}">${esc((p.text || "").slice(0, 70))}</div>
         ${S.pending.includes(p.id) ? `<div class="fetching">⟳ fetching metrics…</div>` : p.fetch_error ? `<div class="err">⚠ ${esc(p.fetch_error)}</div>` : ""}</td>
@@ -308,8 +362,8 @@ function render() {
       <td>${fmtPct(div(e, p.views))}</td><td>${fmt$(div((p.budget || 0) * 1000, p.views))}</td><td>${fmt$(div(p.budget || 0, e), 3)}</td>
       <td><button class="ghost" title="Refresh" data-refresh="${p.id}">↻</button><button class="ghost" title="Remove" data-del-post="${p.id}">✕</button></td>
     </tr>`;
-  }).join("") : `<tr><td colspan="15" class="l muted">No posts yet — paste links above.</td></tr>`;
-  $("postsFoot").innerHTML = P.length ? `<tr><td class="l">Total</td><td></td><td></td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td>
+  }).join("") : `<tr><td colspan="16" class="l muted">No posts yet — paste links above.</td></tr>`;
+  $("postsFoot").innerHTML = P.length ? `<tr><td></td><td class="l">Total</td><td></td><td></td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td>
     ${ENG.map((m) => `<td>${fmtInt(P.reduce((s, p) => s + (p[m] || 0), 0))}</td>`).join("")}<td>${fmtInt(T.eng)}</td>
     <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spendV * 1000, T.views))}</td><td>${fmt$(div(T.spendE, T.eng), 3)}</td><td></td></tr>` : "";
 
@@ -458,6 +512,11 @@ $("deleteCampaign").onclick = async () => {
   if (await askConfirm(`Delete "${S.campaigns.find((x) => x.id === cid)?.name}" and all its posts and data?`, "Delete")) { await api("/api/campaigns/delete", { id: cid }); cid = null; load(); }
 };
 
+$("postsHead").addEventListener("click", (e) => { const th = e.target.closest("th[data-sort]"); if (th) setSort(th.dataset.sort); });
+$("sortbar").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-preset]");
+  if (b) setSort(b.dataset.preset, { views: "desc", eng: "desc", er: "desc", cpm: "asc", cpe: "asc", budget: "desc", day: "asc" }[b.dataset.preset]);
+});
 $("usersBtn").onclick = () => $("usersFile").click();
 $("usersFile").onchange = async () => {
   const f = $("usersFile").files[0]; $("usersFile").value = "";
