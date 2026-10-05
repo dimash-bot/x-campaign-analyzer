@@ -1,0 +1,10 @@
+# Data contains creators' emails and payment details — never commit it.
+*.db
+*.db-wal
+*.db-shm
+*.db.upload
+backups/
+__pycache__/
+.env
+.DS_Store
+.git
