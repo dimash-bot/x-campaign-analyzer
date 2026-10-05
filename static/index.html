@@ -131,7 +131,17 @@ td input.note { width: 170px; text-align: left; }
   </section>
 
   <section class="card">
-    <h2>3 · Daily results — registrations &amp; API key users</h2>
+    <h2>3 · Daily results — registrations &amp; API users</h2>
+    <div class="row" style="margin-bottom:10px">
+      <button id="usersBtn">⬆ Upload users CSV</button>
+      <label class="muted" for="usersTz">times in</label>
+      <select id="usersTz">
+        <option value="America/Los_Angeles">US Pacific (PT)</option><option value="America/New_York">US Eastern (ET)</option>
+        <option value="UTC">UTC</option><option value="Europe/London">London</option><option value="Asia/Almaty">Almaty</option>
+      </select>
+      <input type="file" id="usersFile" accept=".csv,text/csv" hidden>
+      <span id="usersStatus" class="hint" style="margin:0"></span>
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -142,7 +152,7 @@ td input.note { width: 170px; text-align: left; }
         <tfoot id="daysFoot"></tfoot>
       </table>
     </div>
-    <div class="row" style="margin-top:10px">
+    <div class="row" style="margin-top:10px" id="manualDays">
       <input type="date" id="newDay" aria-label="Add day">
       <button id="addDay">+ Add day</button>
       <span class="hint" style="margin:0">Add days with no posts too — they give you an organic baseline to compare against.</span>
@@ -273,12 +283,15 @@ function render() {
     ${ENG.map((m) => `<td>${fmtInt(P.reduce((s, p) => s + (p[m] || 0), 0))}</td>`).join("")}<td>${fmtInt(T.eng)}</td>
     <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spend * 1000, T.views))}</td><td>${fmt$(div(T.spend, T.eng), 3)}</td><td></td></tr>` : "";
 
-  // Days table
+  // Days table — computed from the imported users when there are any, otherwise typed in by hand
+  const fromUsers = S.days_source === "users";
+  $("manualDays").style.display = fromUsers ? "none" : "";
+  $("usersStatus").textContent = fromUsers ? `${fmtInt(S.users_total)} users imported — each user is assigned to the latest wave whose first post came before their signup.` : "";
   $("daysBody").innerHTML = days.length ? days.map((d) => `<tr>
       <td class="l">${esc(d.day)}</td><td>${d.posts}</td><td>${fmt$(d.spend)}</td><td>${fmtInt(d.views)}</td><td>${fmtInt(d.eng)}</td>
       <td>${fmtPct(div(d.engV, d.views))}</td><td>${fmt$(div(d.spend * 1000, d.views))}</td>
-      <td>${d.day === "—" ? "" : `<input type="number" min="0" value="${d.reg}" data-day="${d.day}" data-f="registrations">`}</td>
-      <td>${d.day === "—" ? "" : `<input type="number" min="0" value="${d.api}" data-day="${d.day}" data-f="api_users">`}</td>
+      <td>${d.day === "—" ? "" : fromUsers ? fmtInt(d.reg) : `<input type="number" min="0" value="${d.reg}" data-day="${d.day}" data-f="registrations">`}</td>
+      <td>${d.day === "—" ? "" : fromUsers ? fmtInt(d.api) : `<input type="number" min="0" value="${d.api}" data-day="${d.day}" data-f="api_users">`}</td>
       <td>${fmt$(div(d.spend, d.reg))}</td><td>${fmt$(div(d.spend, d.api))}</td><td>${fmtPct(div(d.api, d.reg), 1)}</td>
       <td>${div(d.reg * 1000, d.views)?.toFixed(2) ?? "—"}</td>
       <td>${d.hasEntry && !d.posts ? `<button class="ghost" title="Remove day" data-del-day="${d.day}">✕</button>` : ""}</td>
@@ -412,6 +425,16 @@ $("deleteCampaign").onclick = async () => {
   if (await askConfirm(`Delete "${S.campaigns.find((x) => x.id === cid)?.name}" and all its posts and data?`, "Delete")) { await api("/api/campaigns/delete", { id: cid }); cid = null; load(); }
 };
 
+$("usersBtn").onclick = () => $("usersFile").click();
+$("usersFile").onchange = async () => {
+  const f = $("usersFile").files[0]; $("usersFile").value = "";
+  if (!f) return;
+  const r = await fetch("/api/users/import?tz=" + encodeURIComponent($("usersTz").value), { method: "POST", headers: { "Content-Type": "text/csv" }, body: f });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return toast("Import failed: " + (j.error || r.status));
+  toast(`Imported ${j.imported} users` + (j.skipped_rows ? ` (${j.skipped_rows} rows skipped)` : ""));
+  load();
+};
 $("restoreBtn").onclick = () => $("restoreFile").click();
 $("restoreFile").onchange = async () => {
   const f = $("restoreFile").files[0]; $("restoreFile").value = "";

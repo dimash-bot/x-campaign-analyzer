@@ -53,9 +53,30 @@ python3 server.py            # http://localhost:8787 — login is off unless GOO
    | `ALLOWED_DOMAIN` | optional, default `nace.ai` |
    | `X_AUTH_TOKEN`, `X_CT0` | optional — only if X blocks guest access from Railway (see below) |
 
-6. Open the URL, sign in, click **Restore** and upload your local `campaigns.db` to bring existing data over.
+6. Bring existing data over: in the **local** app click **Backup** (downloads a consistent snapshot — don't
+   copy `campaigns.db` directly, recent edits may still sit in `campaigns.db-wal`), then open the Railway URL,
+   sign in, click **Restore** and upload that file.
 
 Every push to `main` redeploys automatically; the volume keeps the data.
+
+## Use it from Claude (MCP connector)
+
+The app exposes an MCP server at `https://<your-railway-domain>/mcp`, so Claude can add and analyse data:
+"add this payment sheet to wave 3", "import this users export", "who were the top performers?".
+
+- **claude.ai** (team or personal): Settings → Connectors → **Add custom connector** → URL
+  `https://<your-railway-domain>/mcp`. Claude opens the app's sign-in (Google, @nace.ai) and an Allow screen.
+- **Claude Code**: `claude mcp add --transport http campaigns https://<your-railway-domain>/mcp`, then `/mcp` to sign in.
+
+Tools: `list_campaigns`, `create_campaign`, `rename_campaign`, `add_posts`, `update_post`, `remove_post`,
+`set_other_spend`, `refresh_metrics`, `import_users`, `get_report`, `get_posts`.
+
+How auth works: the app is its own OAuth 2.1 authorization server (dynamic client registration + PKCE), and
+uses the Google login to decide who is allowed. Codes and tokens are HMAC-signed with `SESSION_SECRET`
+(1-hour access tokens, 30-day refresh tokens); rotating `SESSION_SECRET` signs everyone out.
+
+**Waves are assigned by time.** Each user belongs to the latest wave whose first post came before their
+signup, so a new wave's posts must start after the previous wave's — don't put old posts into a new wave.
 
 ### If posts show "⚠ HTTP 403/404" after deploying
 

@@ -16,15 +16,22 @@ import os
 import queue
 import shutil
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import auth
+import mcp_server
 from x_client import XClient, tweet_id_from
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", HERE)
@@ -83,6 +90,11 @@ def init_db():
         add_col("posts", "note", "TEXT")
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
+        # Signup export rows. When present they are the source of truth for daily registrations / API users.
+        c.execute("""CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY, signed_up TEXT NOT NULL,          -- UTC ISO
+            keys INTEGER DEFAULT 0, requests_all REAL DEFAULT 0, requests_7d REAL DEFAULT 0,
+            credit TEXT, unconfirmed INTEGER DEFAULT 0, ref TEXT, imported_at TEXT)""")
         if not c.execute("SELECT 1 FROM campaigns").fetchone():
             c.execute("INSERT INTO campaigns(name, created_at) VALUES (?, ?)", ("My first campaign", now()))
 
@@ -179,10 +191,196 @@ def state(campaign_id):
     with db() as c:
         campaigns = [dict(r) for r in c.execute("SELECT * FROM campaigns ORDER BY id")]
         posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE campaign_id=? ORDER BY day, id", (campaign_id,))]
-        days = [dict(r) for r in c.execute("SELECT * FROM days WHERE campaign_id=? ORDER BY day", (campaign_id,))]
+        by_users = user_days(c)
+        if by_users is None:
+            days = [dict(r) for r in c.execute("SELECT * FROM days WHERE campaign_id=? ORDER BY day", (campaign_id,))]
+        else:
+            days = by_users.get(campaign_id, [])
+        n_users = c.execute("SELECT count(*) FROM users").fetchone()[0]
     with _pending_lock:
         pending = [p["id"] for p in posts if p["id"] in _pending]
-    return {"campaigns": campaigns, "posts": posts, "days": days, "pending": pending}
+    return {"campaigns": campaigns, "posts": posts, "days": days, "pending": pending,
+            "days_source": "users" if by_users is not None else "manual", "users_total": n_users}
+
+
+# ---------------------------------------------------------------- users → waves
+
+def _num(v):
+    s = str(v or "0").replace(",", "").replace("$", "").strip()
+    mult = {"K": 1e3, "M": 1e6, "B": 1e9}
+    try:
+        return float(s[:-1]) * mult[s[-1].upper()] if s and s[-1].upper() in mult else float(s or 0)
+    except ValueError:
+        return 0.0
+
+
+_DATE_FORMATS = ["%b %d, %Y, %I:%M %p", "%b %d, %Y %I:%M %p", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+                 "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y %I:%M %p", "%Y-%m-%d", "%m/%d/%Y"]
+
+
+def _parse_time(s, tz):
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        t = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        t = None
+        for f in _DATE_FORMATS:
+            try:
+                t = datetime.strptime(s, f)
+                break
+            except ValueError:
+                pass
+    if t is None:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=tz)
+    return t.astimezone(timezone.utc)
+
+
+def import_users(csv_text, tz_name="America/Los_Angeles"):
+    """Upsert users from a signup export. Columns are matched by name, so other export shapes work too."""
+    tz = ZoneInfo(tz_name) if ZoneInfo else timezone.utc
+    rows = list(csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff"))))
+    if not rows:
+        raise ValueError("CSV has no rows")
+    cols = {k.lower().strip(): k for k in rows[0].keys() if k}
+
+    def col(*names):
+        return next((cols[n] for n in names if n in cols), None)
+    c_email = col("email", "e-mail", "user_email")
+    c_time = col("signed_up", "signup", "signed_up_at", "created_at", "created", "registered", "signup_date", "date")
+    if not c_email or not c_time:
+        raise ValueError(f"Need an email and a signup-time column; got: {', '.join(cols.values())}")
+    c_keys, c_req, c_req7 = col("keys", "api_keys"), col("requests_all", "requests", "total_requests"), col("requests_7d")
+    c_credit, c_method, c_ref = col("credit"), col("sign_in_method"), col("ref", "referral", "utm_source", "referrer")
+    ok, bad = 0, 0
+    with _db_lock, db() as c:
+        for r in rows:
+            email, t = (r.get(c_email) or "").strip().lower(), _parse_time(r.get(c_time), tz)
+            if not email or not t:
+                bad += 1
+                continue
+            c.execute("""INSERT INTO users(email, signed_up, keys, requests_all, requests_7d, credit, unconfirmed, ref, imported_at)
+                         VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET signed_up=excluded.signed_up,
+                         keys=excluded.keys, requests_all=excluded.requests_all, requests_7d=excluded.requests_7d,
+                         credit=excluded.credit, unconfirmed=excluded.unconfirmed, ref=COALESCE(excluded.ref, users.ref),
+                         imported_at=excluded.imported_at""",
+                      (email, t.isoformat(), int(_num(r.get(c_keys))) if c_keys else 0,
+                       _num(r.get(c_req)) if c_req else 0, _num(r.get(c_req7)) if c_req7 else 0,
+                       r.get(c_credit) if c_credit else None,
+                       int("unconfirmed" in (r.get(c_method) or "").lower()) if c_method else 0,
+                       (r.get(c_ref) or None) if c_ref else None, now()))
+            ok += 1
+        total = c.execute("SELECT count(*) FROM users").fetchone()[0]
+        waves = {}
+        for cid, rows_ in (user_days(c) or {}).items():
+            waves[cid] = sum(d["registrations"] for d in rows_)
+        names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM campaigns")}
+    return {"imported": ok, "skipped_rows": bad, "users_total": total, "timezone": tz_name,
+            "registrations_by_wave": {names[k]: v for k, v in waves.items()}}
+
+
+def wave_starts(c):
+    """[(campaign_id, first_post_utc)] for campaigns that have fetched posts, oldest first."""
+    rows = c.execute("""SELECT campaign_id, min(created_at) FROM posts WHERE created_at IS NOT NULL AND created_at != ''
+                        GROUP BY campaign_id ORDER BY min(created_at)""").fetchall()
+    return [(r[0], datetime.fromisoformat(r[1])) for r in rows]
+
+
+def assign_waves(c):
+    """{email: campaign_id}. A user belongs to the latest wave whose first post came before their signup;
+    users from before the first wave count toward the first wave."""
+    starts = wave_starts(c)
+    if not starts:
+        return {}
+    out = {}
+    for u in c.execute("SELECT email, signed_up FROM users"):
+        t = datetime.fromisoformat(u[1])
+        cid = starts[0][0]
+        for wid, st in starts:
+            if t >= st:
+                cid = wid
+        out[u[0]] = cid
+    return out
+
+
+def user_days(c):
+    """Daily registrations / API users per wave from the users table, or None if no users were imported."""
+    if not c.execute("SELECT 1 FROM users LIMIT 1").fetchone():
+        return None
+    wave = assign_waves(c)
+    agg = {}
+    for u in c.execute("SELECT email, signed_up, requests_all, credit FROM users"):
+        cid = wave.get(u[0])
+        if cid is None:
+            continue
+        d = agg.setdefault(cid, {}).setdefault(u[1][:10], {"day": u[1][:10], "registrations": 0, "api_users": 0, "flagged": 0})
+        d["registrations"] += 1
+        d["api_users"] += u[2] > 0
+        d["flagged"] += (u[3] or "") in ("Credit voided", "Credit withheld")
+    return {cid: sorted(v.values(), key=lambda d: d["day"]) for cid, v in agg.items()}
+
+
+def report(campaign_ids=None, top=5):
+    """Dashboard numbers per campaign + creators ranked by average of CPM rank and CPE rank."""
+    r2 = lambda x: round(x, 2) if x is not None else None  # noqa: E731
+    dv = lambda a, b: a / b if b else None                 # noqa: E731
+    out = []
+    with db() as c:
+        camps = [dict(r) for r in c.execute("SELECT * FROM campaigns ORDER BY id")]
+        by_users = user_days(c)
+        for camp in camps:
+            if campaign_ids and camp["id"] not in campaign_ids:
+                continue
+            posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE campaign_id=?", (camp["id"],))]
+            days = (by_users or {}).get(camp["id"], []) if by_users is not None else \
+                [dict(r) for r in c.execute("SELECT * FROM days WHERE campaign_id=?", (camp["id"],))]
+            eng = lambda p: sum(p[k] for k in METRICS[1:])  # noqa: E731
+            x_spend = sum(p["budget"] or 0 for p in posts)
+            total = x_spend + (camp["other_spend"] or 0)
+            views = sum(p["views"] for p in posts)
+            e_all, e_v = sum(eng(p) for p in posts), sum(eng(p) for p in posts if p["views"])
+            regs = sum(d["registrations"] for d in days)
+            api = sum(d["api_users"] for d in days)
+            creators = {}
+            for p in posts:
+                a = creators.setdefault(p["author"] or p["url"], {"creator": p["author"], "posts": 0, "cost": 0, "views": 0, "engagements": 0})
+                a["posts"] += 1
+                a["cost"] += p["budget"] or 0
+                a["views"] += p["views"]
+                a["engagements"] += eng(p)
+            paid = [a for a in creators.values() if a["cost"] > 0 and a["views"] > 0]
+            for a in paid:
+                a["er_pct"] = r2(a["engagements"] / a["views"] * 100)
+                a["cpm"] = r2(a["cost"] / a["views"] * 1000)
+                a["cpe"] = r2(dv(a["cost"], a["engagements"]))
+            by_cpm = sorted(paid, key=lambda a: a["cpm"])
+            by_cpe = sorted(paid, key=lambda a: a["cpe"] if a["cpe"] is not None else 1e9)
+            for a in paid:
+                a["rank_score"] = (by_cpm.index(a) + by_cpe.index(a)) / 2 + 1
+            ranked = sorted(paid, key=lambda a: (a["rank_score"], a["cpm"]))
+            out.append({
+                "id": camp["id"], "name": camp["name"], "posts": len(posts),
+                "first_post_utc": min((p["created_at"] for p in posts if p["created_at"]), default=None),
+                "x_spend": x_spend, "other_spend": camp["other_spend"] or 0, "total_budget": total,
+                "avg_cost_per_post": r2(dv(x_spend, len(posts))),
+                "views": views, "engagements": e_all, "er_pct": r2(dv(e_v * 100, views)),
+                "avg_cpm": r2(dv(x_spend * 1000, views)), "avg_cpe": r2(dv(x_spend, e_all)),
+                "registrations": regs, "api_users": api,
+                "cost_per_registration": r2(dv(total, regs)), "cost_per_api_user": r2(dv(total, api)),
+                "reg_to_api_pct": r2(dv(api * 100, regs)), "regs_per_1k_views": r2(dv(regs * 1000, views)),
+                "flagged_users": sum(d.get("flagged", 0) for d in days),
+                "daily": days,
+                "top": ranked[:top], "bottom": ranked[::-1][:top] if top else [],
+                "unpriced": [{"creator": a["creator"], "views": a["views"]} for a in creators.values() if not a["cost"]],
+                "flags": [f"{a['creator']}: ER {a['er_pct']}% on {a['views']:,} views — check view quality"
+                          for a in paid if a["er_pct"] < 0.3 and a["views"] > 5000],
+            })
+    return {"campaigns": out, "registrations_source": "users" if by_users is not None else "manual",
+            "ranking": "rank_score = average of CPM rank and CPE rank within the wave (lower is better). "
+                       "Per-creator registrations are not tracked unless users have a ref column."}
 
 
 def export_csv(campaign_id):
@@ -283,7 +481,8 @@ class Handler(BaseHTTPRequestHandler):
         if not auth.ENABLED:
             return {"email": "local", "name": "Local (no login)"}
         tok = self._cookie("session")
-        return auth.unsign(tok) if tok else None
+        payload = auth.unsign(tok) if tok else None
+        return payload if payload and "t" not in payload else None   # "t" marks OAuth codes/tokens
 
     # --- auth routes (public)
     def _auth_routes(self, u):
@@ -296,8 +495,10 @@ class Handler(BaseHTTPRequestHandler):
             return True
         if u.path == "/auth/login":
             state_ = auth.new_state()
+            nxt = parse_qs(u.query).get("next", ["/"])[0]
+            nxt = nxt if nxt.startswith("/") and not nxt.startswith("//") else "/"
             self._redirect(auth.login_url(redirect_uri, state_),
-                           [self._set_cookie("oauth_state", auth.sign({"s": state_, "exp": time.time() + 600}), 600)])
+                           [self._set_cookie("oauth_state", auth.sign({"s": state_, "n": nxt, "exp": time.time() + 600}), 600)])
             return True
         if u.path == "/auth/callback":
             q = parse_qs(u.query)
@@ -311,7 +512,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._redirect("/login?error=" + str(e).replace(" ", "+"), [self._set_cookie("oauth_state", "", 0)])
                 return True
             print(f"login: {user['email']}", flush=True)
-            self._redirect("/", [self._set_cookie("session", auth.session_token(user), auth.SESSION_DAYS * 86400),
+            self._redirect(st.get("n") or "/", [self._set_cookie("session", auth.session_token(user), auth.SESSION_DAYS * 86400),
                                  self._set_cookie("oauth_state", "", 0)])
             return True
         if u.path == "/auth/logout":
@@ -334,6 +535,22 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path == "/healthz":
             return self._send(200, {"ok": True})
+        if u.path.startswith("/.well-known/oauth-protected-resource"):
+            return self._send(200, mcp_server.resource_metadata(self._base_url()))
+        if u.path.startswith("/.well-known/oauth-authorization-server"):
+            return self._send(200, mcp_server.as_metadata(self._base_url()))
+        if u.path == "/mcp":
+            return self._send(405, {"error": "use POST"}, headers=[("Allow", "POST")])
+        if u.path == "/oauth/authorize":
+            q = parse_qs(u.query)
+            client, err = mcp_server.check_authorize(q)
+            if err:
+                return self._send(400, err, "text/plain; charset=utf-8")
+            user = self._user()
+            if not user:
+                return self._redirect("/auth/login?next=" + quote(self.path, safe=""))
+            form_token = auth.sign({"t": "consent", "u": user["email"], "c": q["client_id"][0], "exp": time.time() + 600})
+            return self._send(200, mcp_server.consent_page(client, q, user, form_token), "text/html; charset=utf-8")
         if auth.ENABLED and self._auth_routes(u):
             return
         user = self._require_user(u)
@@ -364,10 +581,44 @@ class Handler(BaseHTTPRequestHandler):
     # --- POST
     def do_POST(self):
         u = urlparse(self.path)
+        if u.path == "/mcp":
+            email = mcp_server.bearer_user(self.headers.get("Authorization") or "") if auth.ENABLED else "local"
+            if not email:
+                meta = self._base_url() + "/.well-known/oauth-protected-resource"
+                return self._send(401, {"error": "unauthorized"},
+                                  headers=[("WWW-Authenticate", f'Bearer resource_metadata="{meta}"')])
+            code, payload = mcp_server.handle_rpc(sys.modules[__name__], email, self._body_bytes())
+            if payload is None:
+                self.send_response(code)
+                self.send_header("Content-Length", "0")
+                return self.end_headers()
+            return self._send(code, payload)
+        if u.path == "/oauth/register":
+            return self._send(*mcp_server.register(self._body_bytes()))
+        if u.path == "/oauth/token":
+            return self._send(*mcp_server.token(self._body_bytes()))
+        if u.path == "/oauth/authorize":
+            f = parse_qs(self._body_bytes().decode())
+            user, client, err = self._user(), *mcp_server.check_authorize(f)
+            tok = auth.unsign(f.get("form_token", [""])[0])
+            if err or not user or not tok or tok.get("t") != "consent" or tok["u"] != user["email"] or tok["c"] != f["client_id"][0]:
+                return self._send(400, err or "Authorization expired — try connecting again.", "text/plain; charset=utf-8")
+            if f.get("decision", [""])[0] != "allow":
+                ru = f["redirect_uri"][0]
+                return self._redirect(ru + ("&" if "?" in ru else "?") + urlencode(
+                    {"error": "access_denied", **({"state": f["state"][0]} if f.get("state") else {})}))
+            print(f"mcp authorized: {user['email']} -> {client['n']}", flush=True)
+            return self._redirect(mcp_server.issue_code(f, user))
         user = self._require_user(u)
         if not user:
             return
         path = u.path
+        if path == "/api/users/import":
+            tz = parse_qs(u.query).get("tz", ["America/Los_Angeles"])[0]
+            try:
+                return self._send(200, import_users(self._body_bytes().decode("utf-8", "replace"), tz))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/restore":
             try:
                 with _db_lock:
