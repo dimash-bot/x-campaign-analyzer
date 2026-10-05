@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaign Totals</title>
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee; --border: #e3e3de;
+  --text: #1a1a18; --muted: #6b6b66; --accent: #1d6fe0; --accent-soft: #e8f0fc; --good: #16794a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
+    --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-soft: #1c2a40; --good: #4cc38a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+nav { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+nav a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 7px; font-weight: 500; }
+nav a.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.me { color: var(--muted); font-size: 12.5px; }
+.me a { color: inherit; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.kpi .l { color: var(--muted); font-size: 12px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; letter-spacing: -0.01em; }
+.kpi .s { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.kpi.hl { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.kpi.hl .v { color: var(--accent); }
+.table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+th:first-child, td:first-child { text-align: left; }
+tbody tr { cursor: pointer; }
+tbody tr:hover td { background: var(--surface-2); }
+td.wave { font-weight: 600; }
+td.wave small { display: block; color: var(--muted); font-weight: 400; font-size: 11.5px; }
+td.best { color: var(--good); font-weight: 650; }
+td.key { background: var(--accent-soft); }
+th.key { color: var(--accent); }
+tfoot td { font-weight: 650; border-top: 2px solid var(--border); border-bottom: none; }
+.legend { color: var(--muted); font-size: 12px; margin-top: 10px; }
+.legend b { color: var(--good); }
+.empty { color: var(--muted); padding: 20px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <h1>X Campaign Analyzer</h1>
+      <nav><a href="/">Waves</a><a href="/totals" class="on">Totals</a></nav>
+    </div>
+    <span class="me" id="me"></span>
+  </header>
+
+  <h2>All waves</h2>
+  <p class="sub" id="asof"></p>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <h2>By wave</h2>
+    <p class="sub">Click a wave to open it. Green = best value in the column.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Wave</th><th>Posts</th><th>Budget</th><th>Avg / post</th><th>Views</th><th>Engag.</th><th>ER</th>
+          <th>CPM</th><th>CPE</th><th>Registrations</th><th class="key">$ / reg</th><th>API users</th><th class="key">$ / API user</th>
+          <th>Reg → API</th><th>Reg / 1K views</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+        <tfoot id="foot"></tfoot>
+      </table>
+    </div>
+    <div class="legend">CPM, ER and CPE only count posts that have views (e.g. a LinkedIn post without impressions yet).
+      Budget includes other spend. Users are assigned to the latest wave whose first post came before their signup.</div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ok = (n) => n != null && isFinite(n);
+const fmtN = (n) => !ok(n) ? "—" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
+const fmtInt = (n) => (n || 0).toLocaleString();
+const fmt$ = (n, d = 2) => !ok(n) ? "—" : "$" + n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (n, d = 2) => !ok(n) ? "—" : n.toFixed(d) + "%";
+const PLAT = { x: "X", linkedin: "LinkedIn", other: "Other" };
+
+async function api(path) {
+  const r = await fetch(path);
+  if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+  return r.json();
+}
+
+// Columns: [field, formatter, better ("low" | "high" | null), extra class]
+const COLS = [
+  ["posts", fmtInt], ["total_budget", (v) => fmt$(v, 0)], ["avg_cost_per_post", (v) => fmt$(v, 0)],
+  ["views", fmtN, "high"], ["engagements", fmtN, "high"], ["er_pct", (v) => pct(v), "high"],
+  ["avg_cpm", (v) => fmt$(v), "low"], ["avg_cpe", (v) => fmt$(v), "low"],
+  ["registrations", fmtInt, "high"], ["cost_per_registration", (v) => fmt$(v), "low", "key"],
+  ["api_users", fmtInt, "high"], ["cost_per_api_user", (v) => fmt$(v), "low", "key"],
+  ["reg_to_api_pct", (v) => pct(v, 1), "high"], ["regs_per_1k_views", (v) => ok(v) ? v.toFixed(2) : "—", "high"],
+];
+
+function render(R) {
+  const T = R.totals, W = R.campaigns.filter((c) => c.posts || c.registrations);
+  const spendBy = Object.entries(T.by_platform || {}).sort((a, b) => b[1] - a[1]).map(([p, v]) => `${fmt$(v, 0)} ${PLAT[p] || p}`);
+  if (T.other_spend) spendBy.push(`${fmt$(T.other_spend, 0)} other`);
+  const k = (l, v, s = "", cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  $("kpis").innerHTML = [
+    k("Total budget", fmt$(T.total_budget, 0), spendBy.join(" · ")),
+    k("Posts", fmtInt(T.posts), `${W.length} wave${W.length === 1 ? "" : "s"} · ${fmt$(T.avg_cost_per_post, 0)} avg`),
+    k("Views", fmtN(T.views), `${fmtN(T.engagements)} engagements`),
+    k("ER", pct(T.er_pct), "engagements ÷ views"),
+    k("Avg CPM", fmt$(T.avg_cpm), "cost per 1K views"),
+    k("Avg CPE", fmt$(T.avg_cpe, 3), "cost per engagement"),
+    k("Registrations", fmtInt(T.registrations), `${ok(T.regs_per_1k_views) ? T.regs_per_1k_views.toFixed(2) : "—"} per 1K views`),
+    k("Cost / registration", fmt$(T.cost_per_registration), "total budget ÷ registrations", "hl"),
+    k("API users", fmtInt(T.api_users), `${pct(T.reg_to_api_pct, 1)} of registrations`),
+    k("Cost / API user", fmt$(T.cost_per_api_user), "total budget ÷ API users", "hl"),
+  ].join("");
+
+  // Best value per column (only meaningful with 2+ waves)
+  const best = {};
+  if (W.length > 1) for (const [f, , dir] of COLS) {
+    const vals = W.map((w) => w[f]).filter(ok);
+    if (dir && vals.length > 1) best[f] = dir === "low" ? Math.min(...vals) : Math.max(...vals);
+  }
+  const cells = (row, isTotal) => COLS.map(([f, fmt, , cls]) =>
+    `<td class="${cls || ""}${!isTotal && f in best && row[f] === best[f] ? " best" : ""}">${fmt(row[f])}</td>`).join("");
+
+  $("rows").innerHTML = W.length ? W.map((w) => `<tr data-id="${w.id}">
+      <td class="wave">${esc(w.name)}<small>${w.first_post_utc ? "from " + new Date(w.first_post_utc).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "no posts yet"}</small></td>
+      ${cells(w, false)}</tr>`).join("") : `<tr><td colspan="15" class="empty">No waves with data yet.</td></tr>`;
+  $("foot").innerHTML = W.length ? `<tr><td>All waves</td>${cells(T, true)}</tr>` : "";
+  $("asof").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · refreshes every 30s`;
+}
+
+$("rows").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-id]");
+  if (!tr) return;
+  try { localStorage.setItem("xca_campaign", tr.dataset.id); } catch (err) {}
+  location.href = "/";
+});
+
+async function load() {
+  try { render(await api("/api/report")); } catch (e) { /* keep last render */ }
+  setTimeout(load, 30000);
+}
+api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
+load();
+</script>
+</body>
+</html>

@@ -395,6 +395,7 @@ def report(campaign_ids=None, top=5):
                 "cost_per_registration": r2(dv(total, regs)), "cost_per_api_user": r2(dv(total, api)),
                 "reg_to_api_pct": r2(dv(api * 100, regs)), "regs_per_1k_views": r2(dv(regs * 1000, views)),
                 "flagged_users": sum(d.get("flagged", 0) for d in days),
+                "_sums": {"spend_v": spend_v, "spend_e": spend_e, "eng_v": e_v},   # for cross-wave totals
                 "daily": days,
                 "top": ranked[:top], "bottom": ranked[::-1][:top] if top else [],
                 "missing_views": [a["creator"] for a in creators.values() if a["cost"] and not a["views"]],
@@ -402,7 +403,20 @@ def report(campaign_ids=None, top=5):
                 "flags": [f"{a['creator']}: ER {a['er_pct']}% on {a['views']:,} views — check view quality"
                           for a in paid if a["er_pct"] < 0.3 and a["views"] > 5000],
             })
-    return {"campaigns": out, "registrations_source": "users" if by_users is not None else "manual",
+    live = [c for c in out if c["posts"] or c["registrations"]]          # empty waves don't count toward totals
+    tot = {k: sum(c[k] for c in live) for k in ("posts", "posts_spend", "other_spend", "total_budget", "views",
+                                                  "engagements", "registrations", "api_users", "flagged_users")}
+    sv, se, ev = (sum(c["_sums"][k] for c in live) for k in ("spend_v", "spend_e", "eng_v"))
+    tot.update({"name": "All waves", "er_pct": r2(dv(ev * 100, tot["views"])), "avg_cpm": r2(dv(sv * 1000, tot["views"])),
+                "avg_cpe": r2(dv(se, tot["engagements"])), "avg_cost_per_post": r2(dv(tot["posts_spend"], tot["posts"])),
+                "cost_per_registration": r2(dv(tot["total_budget"], tot["registrations"])),
+                "cost_per_api_user": r2(dv(tot["total_budget"], tot["api_users"])),
+                "reg_to_api_pct": r2(dv(tot["api_users"] * 100, tot["registrations"])),
+                "regs_per_1k_views": r2(dv(tot["registrations"] * 1000, tot["views"])),
+                "by_platform": {pl: sum(c["by_platform"].get(pl, 0) for c in live) for pl in {p for c in live for p in c["by_platform"]}}})
+    for c in out:
+        c.pop("_sums", None)
+    return {"campaigns": out, "totals": tot, "registrations_source": "users" if by_users is not None else "manual",
             "ranking": "rank_score = average of CPM rank and CPE rank within the wave (lower is better). "
                        "Per-creator registrations are not tracked unless users have a ref column."}
 
@@ -584,6 +598,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             with open(os.path.join(HERE, "static", "index.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/totals":
+            with open(os.path.join(HERE, "static", "totals.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/api/report":
+            return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
             return self._send(200, {"email": user["email"], "name": user.get("name"), "auth": auth.ENABLED})
         if u.path == "/api/state":
