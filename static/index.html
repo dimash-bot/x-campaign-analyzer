@@ -40,6 +40,8 @@ button:disabled { opacity: .55; cursor: progress; }
 .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
 .kpi .l { color: var(--muted); font-size: 12px; }
 .kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; letter-spacing: -0.01em; }
+.kpi.hl { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.kpi.hl .v { color: var(--accent); }
 .kpi .s { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
 .grid2 { display: grid; grid-template-columns: 1fr; gap: 16px; }
 .table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
@@ -134,7 +136,7 @@ td input.note { width: 170px; text-align: left; }
       <table>
         <thead><tr>
           <th class="l">Day</th><th>Posts</th><th>Spend</th><th>Views</th><th>Engag.</th><th>ER</th><th>CPM</th>
-          <th>Registrations</th><th>API key users</th><th>$ / reg</th><th>$ / API user</th><th>Reg → API</th><th>Reg / 1K views</th><th></th>
+          <th>Registrations</th><th>API users</th><th>$ / reg</th><th>$ / API user</th><th>Reg → API</th><th>Reg / 1K views</th><th></th>
         </tr></thead>
         <tbody id="daysBody"></tbody>
         <tfoot id="daysFoot"></tfoot>
@@ -235,7 +237,7 @@ function render() {
   const other = camp.other_spend || 0, total = T.spend + other;
   if (document.activeElement !== $("otherSpend")) $("otherSpend").value = other || "";
   if (document.activeElement !== $("otherNote")) $("otherNote").value = camp.other_note || "";
-  const k = (l, v, s = "") => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  const k = (l, v, s = "", cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   $("kpis").innerHTML = [
     k("Total budget", fmt$(total, 0), other ? `${fmt$(T.spend, 0)} X · ${fmt$(other, 0)} other` : "all on X"),
     k("Avg cost / post", fmt$(div(T.spend, P.length), 0), `${P.length} X post${P.length === 1 ? "" : "s"}`),
@@ -244,8 +246,10 @@ function render() {
     k("ER", fmtPct(div(T.engV, T.views)), "engagements ÷ views"),
     k("Avg CPM", fmt$(div(T.spend * 1000, T.views)), "X spend ÷ views × 1K"),
     k("Avg CPE", fmt$(div(T.spend, T.eng), 3), "X spend ÷ engagements"),
-    k("Registrations", fmtInt(reg), fmt$(div(total, reg)) + " per reg (total budget)"),
-    k("API key users", fmtInt(apiU), fmt$(div(total, apiU)) + " per API user"),
+    k("Registrations", fmtInt(reg), (div(reg * 1000, T.views)?.toFixed(2) ?? "—") + " per 1K views"),
+    k("Cost / registration", fmt$(div(total, reg)), "total budget ÷ registrations", "hl"),
+    k("API users", fmtInt(apiU), "made ≥1 API request"),
+    k("Cost / API user", fmt$(div(total, apiU)), "total budget ÷ API users", "hl"),
     k("Reg → API", fmtPct(div(apiU, reg), 1), "activation rate"),
   ].join("");
 
