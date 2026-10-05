@@ -292,9 +292,9 @@ function render() {
       <td>${fmtPct(div(d.engV, d.views))}</td><td>${fmt$(div(d.spend * 1000, d.views))}</td>
       <td>${d.day === "—" ? "" : fromUsers ? fmtInt(d.reg) : `<input type="number" min="0" value="${d.reg}" data-day="${d.day}" data-f="registrations">`}</td>
       <td>${d.day === "—" ? "" : fromUsers ? fmtInt(d.api) : `<input type="number" min="0" value="${d.api}" data-day="${d.day}" data-f="api_users">`}</td>
-      <td>${fmt$(div(d.spend, d.reg))}</td><td>${fmt$(div(d.spend, d.api))}</td><td>${fmtPct(div(d.api, d.reg), 1)}</td>
+      <td>${d.spend ? fmt$(div(d.spend, d.reg)) : "—"}</td><td>${d.spend ? fmt$(div(d.spend, d.api)) : "—"}</td><td>${fmtPct(div(d.api, d.reg), 1)}</td>
       <td>${div(d.reg * 1000, d.views)?.toFixed(2) ?? "—"}</td>
-      <td>${d.hasEntry && !d.posts ? `<button class="ghost" title="Remove day" data-del-day="${d.day}">✕</button>` : ""}</td>
+      <td>${d.hasEntry && !d.posts && !fromUsers ? `<button class="ghost" title="Remove day" data-del-day="${d.day}">✕</button>` : ""}</td>
     </tr>`).join("") : `<tr><td colspan="14" class="l muted">Days appear automatically once posts are added.</td></tr>`;
   $("daysFoot").innerHTML = days.length ? `<tr><td class="l">Total</td><td>${P.length}</td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td><td>${fmtInt(T.eng)}</td>
     <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spend * 1000, T.views))}</td><td>${fmtInt(reg)}</td><td>${fmtInt(apiU)}</td>
