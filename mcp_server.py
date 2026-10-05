@@ -24,10 +24,13 @@ PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"]
 ACCESS_TTL = 3600
 REFRESH_TTL = 30 * 86400
 
-INSTRUCTIONS = """X Campaign Analyzer: paid X (Twitter) creator campaigns, one campaign per wave.
-- A payment sheet row = creator, cost, notes, post link(s). Use add_posts. If one payment covers several
-  post links, split the cost evenly across them. Ignore non-X links (put their cost in set_other_spend only if
-  the user says so). Metrics are fetched from X in the background after add_posts.
+INSTRUCTIONS = """Campaign Analyzer: paid creator campaigns (X, LinkedIn, other platforms), one campaign per wave.
+- A payment sheet row = creator, cost, notes, post link(s). Use add_posts for every post link (X, LinkedIn,
+  YouTube, ...). Profile links and payment links are not posts — skip them. If one payment covers several post
+  links, split the cost evenly across them. Use set_other_spend only for spend with no post at all.
+- X metrics are fetched automatically. LinkedIn: reactions + comments are fetched, impressions are not public —
+  if the user gives impressions (e.g. from a screenshot), set them with update_post(views=...). Other platforms:
+  all metrics come from the user via update_post.
 - A signup export (CSV of users) goes to import_users as raw CSV text. Users are assigned to waves by signup
   time: each user belongs to the latest wave whose first post was before their signup (earlier users -> first
   wave). Daily registrations / API users are recalculated from it. Ask for the export's timezone if unclear.
@@ -50,18 +53,21 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {"campaign": _campaign_arg(), "name": {"type": "string"}},
                      "required": ["campaign", "name"]}},
     {"name": "add_posts",
-     "description": "Add X posts to a campaign with what each cost. Re-adding an existing post updates its cost/note. "
-                    "Metrics (views, likes, ...) are fetched in the background; call get_posts later to see them.",
+     "description": "Add posts (X, LinkedIn, YouTube, TikTok, ...) to a campaign with what each cost. Re-adding an existing "
+                    "post updates its cost/note. X and LinkedIn metrics are fetched in the background; call get_posts later.",
      "inputSchema": {"type": "object", "required": ["campaign", "posts"], "properties": {
          "campaign": _campaign_arg(),
          "posts": {"type": "array", "items": {"type": "object", "required": ["url"], "properties": {
-             "url": {"type": "string", "description": "x.com/<handle>/status/<id> link"},
+             "url": {"type": "string", "description": "Post link, e.g. x.com/<handle>/status/<id> or a LinkedIn post / lnkd.in link"},
              "cost": {"type": "number", "description": "USD paid for this post (split shared payments evenly)"},
              "note": {"type": "string", "description": "format + payment status, e.g. 'QRT · paid with paypal'"}}}}}}},
-    {"name": "update_post", "description": "Change a post's cost, note, or attribution day (YYYY-MM-DD).",
+    {"name": "update_post",
+     "description": "Change a post's cost, note, attribution day (YYYY-MM-DD), or — for non-X posts — metrics that "
+                    "can't be fetched (LinkedIn impressions go in views; reposts in retweets; comments in replies).",
      "inputSchema": {"type": "object", "required": ["campaign", "url"], "properties": {
          "campaign": _campaign_arg(), "url": {"type": "string"}, "cost": {"type": "number"},
-         "note": {"type": "string"}, "day": {"type": "string"}}}},
+         "note": {"type": "string"}, "day": {"type": "string"},
+         **{k: {"type": "integer"} for k in ("views", "likes", "retweets", "quotes", "replies", "bookmarks")}}}},
     {"name": "remove_post", "description": "Remove a post from a campaign.",
      "inputSchema": {"type": "object", "required": ["campaign", "url"],
                      "properties": {"campaign": _campaign_arg(), "url": {"type": "string"}}}},
@@ -78,8 +84,9 @@ TOOLS = [
          "csv_text": {"type": "string", "description": "The full CSV file content"},
          "timezone": {"type": "string", "description": "IANA timezone of the signup times, default America/Los_Angeles"}}}},
     {"name": "get_report",
-     "description": "Dashboard numbers per campaign (spend, views, ER, CPM, CPE, registrations, API users, cost per "
-                    "registration / API user) plus creators ranked by cost efficiency.",
+     "description": "Dashboard numbers per campaign (spend by platform, views, ER, CPM, CPE, registrations, API users, "
+                    "cost per registration / API user) plus creators ranked by cost efficiency. CPM/ER only count posts "
+                    "that have views; missing_views lists paid posts still needing impressions.",
      "inputSchema": {"type": "object", "properties": {
          "campaign": _campaign_arg("Optional: one campaign; omit for all"),
          "top": {"type": "integer", "description": "How many top/bottom creators to list (default 5)"}}}},
@@ -106,8 +113,10 @@ def _campaign_id(app, c, ref):
 
 
 def _post(app, c, cid, url):
-    tid = app.tweet_id_from(url)
-    row = c.execute("SELECT * FROM posts WHERE campaign_id=? AND tweet_id=?", (cid, tid)).fetchone() if tid else None
+    found = app.platforms.detect(url)
+    row = c.execute("SELECT * FROM posts WHERE campaign_id=? AND tweet_id=?", (cid, found[1])).fetchone() if found else None
+    if not row and found:   # short links are rewritten to the canonical URL once fetched
+        row = c.execute("SELECT * FROM posts WHERE campaign_id=? AND url=?", (cid, found[2])).fetchone()
     if not row:
         raise ToolError(f"Post {url} is not in this campaign")
     return row
@@ -137,18 +146,17 @@ def call_tool(app, user, name, args):
             cid = _campaign_id(app, c, args["campaign"])
             added, updated, invalid = [], [], []
             for p in args["posts"]:
-                url = p["url"].strip()
-                url = url if url.startswith("http") else "https://" + url
-                tid = app.tweet_id_from(url)
-                if not tid:
-                    invalid.append(url)
+                found = app.platforms.detect(p["url"])
+                if not found:
+                    invalid.append(p["url"])
                     continue
+                plat, tid, url = found
                 cost, note = float(p.get("cost") or 0), p.get("note") or None
-                cur = c.execute("INSERT OR IGNORE INTO posts(campaign_id, url, tweet_id, budget, note) VALUES (?,?,?,?,?)",
-                                (cid, url.split("?")[0], tid, cost, note))
+                cur = c.execute("INSERT OR IGNORE INTO posts(campaign_id, url, tweet_id, budget, note, platform) VALUES (?,?,?,?,?,?)",
+                                (cid, url, tid, cost, note, plat))
                 if cur.rowcount:
                     added.append(url)
-                    to_fetch.append((cur.lastrowid, tid))
+                    to_fetch.append({"id": cur.lastrowid, "tweet_id": tid, "platform": plat, "url": url})
                 else:
                     c.execute("UPDATE posts SET budget=?, note=COALESCE(?, note) WHERE campaign_id=? AND tweet_id=?",
                               (cost, note, cid, tid))
@@ -160,6 +168,12 @@ def call_tool(app, user, name, args):
             cid = _campaign_id(app, c, args["campaign"])
             row = _post(app, c, cid, args["url"])
             fields = {"budget": args.get("cost"), "note": args.get("note"), "day": args.get("day")}
+            auto = app.platforms.AUTO_METRICS[row["platform"] or "x"]
+            for k in app.METRICS:
+                if args.get(k) is not None:
+                    if k in auto:
+                        raise ToolError(f"{k} is fetched automatically for {row['platform'] or 'x'} posts and can't be set")
+                    fields[k] = int(args[k])
             fields = {k: v for k, v in fields.items() if v is not None}
             if fields:
                 c.execute(f"UPDATE posts SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?", (*fields.values(), row["id"]))
@@ -176,16 +190,16 @@ def call_tool(app, user, name, args):
             result = {"campaign": cid, "other_spend": float(args["amount"])}
         elif name == "refresh_metrics":
             cid = _campaign_id(app, c, args["campaign"])
-            to_fetch = [(r["id"], r["tweet_id"]) for r in c.execute("SELECT id, tweet_id FROM posts WHERE campaign_id=?", (cid,))]
+            to_fetch = [r for r in c.execute("SELECT id, tweet_id, platform, url FROM posts WHERE campaign_id=?", (cid,))
+                        if (r["platform"] or "x") in ("x", "linkedin")]
             result = {"queued": len(to_fetch)}
         elif name == "get_posts":
             cid = _campaign_id(app, c, args["campaign"])
-            result = [{k: r[k] for k in ("url", "author", "day", "budget", "note", *app.METRICS, "fetch_error")}
+            result = [{k: r[k] for k in ("platform", "url", "author", "day", "budget", "note", *app.METRICS, "fetch_error")}
                       for r in c.execute("SELECT * FROM posts WHERE campaign_id=? ORDER BY day, id", (cid,))]
         else:
             raise ToolError(f"Unknown tool {name}")
-    for post_id, tid in to_fetch:
-        app.enqueue(post_id, tid)
+    app.enqueue_rows(to_fetch)
     print(f"mcp {name} by {user}", flush=True)
     return result
 

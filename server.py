@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import auth
 import mcp_server
+import platforms
 from x_client import XClient, tweet_id_from
 
 try:
@@ -88,6 +89,7 @@ def init_db():
             if col not in [r[1] for r in c.execute(f"PRAGMA table_info({table})")]:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         add_col("posts", "note", "TEXT")
+        add_col("posts", "platform", "TEXT DEFAULT 'x'")       # x | linkedin | other
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
         # Signup export rows. When present they are the source of truth for daily registrations / API users.
@@ -106,30 +108,46 @@ _pending = set()                 # post ids queued or in flight, shown as "fetch
 _pending_lock = threading.Lock()
 
 
-def enqueue(post_id, tweet_id):
+def enqueue(post_id, key, platform="x", url=None):
+    if platform not in ("x", "linkedin"):
+        return                                  # nothing public to fetch; metrics are typed in
     with _pending_lock:
         if post_id in _pending:
             return
         _pending.add(post_id)
-    _jobs.put((post_id, tweet_id))
+    _jobs.put((post_id, key, platform, url))
+
+
+def enqueue_rows(rows):
+    for r in rows:
+        enqueue(r["id"], r["tweet_id"], r["platform"] or "x", r["url"])
 
 
 def fetch_worker():
     client = None
     while True:
-        post_id, tweet_id = _jobs.get()
+        post_id, key, platform, url = _jobs.get()
         try:
-            if client is None:
-                client = XClient()
-            m = client.fetch(tweet_id)          # network call happens outside the DB lock
+            if platform == "linkedin":
+                m = platforms.fetch_linkedin(url)
+            else:
+                if client is None:
+                    client = XClient()
+                m = client.fetch(key)           # network call happens outside the DB lock
+            auto = [k for k in METRICS if k in platforms.AUTO_METRICS[platform]]   # never overwrite typed-in numbers
             with _db_lock, db() as c:
                 c.execute(
-                    f"""UPDATE posts SET author=?, text=?, created_at=?, {", ".join(f"{k}=?" for k in METRICS)},
+                    f"""UPDATE posts SET author=?, text=?, created_at=?, {"".join(f"{k}=?, " for k in auto)}
                         fetched_at=?, fetch_error=NULL, day=COALESCE(day, ?) WHERE id=?""",
-                    (m["author"], m["text"], m["created_at"], *[m[k] for k in METRICS],
+                    (m["author"], m["text"], m["created_at"], *[m[k] for k in auto],
                      now(), (m["created_at"] or "")[:10] or None, post_id))
+                if m.get("resolved_key") and m["resolved_key"] != key:   # short link -> canonical post id
+                    try:
+                        c.execute("UPDATE posts SET tweet_id=?, url=? WHERE id=?", (m["resolved_key"], m["resolved_url"], post_id))
+                    except sqlite3.IntegrityError:
+                        pass                        # same post already tracked under its full URL
         except Exception as e:  # noqa: BLE001 — record any failure on the row so the UI shows it
-            print(f"fetch {tweet_id} failed: {e}", flush=True)
+            print(f"fetch {platform} {key} failed: {e}", flush=True)
             if "guest" in str(e).lower():
                 client = None
             with _db_lock, db() as c:
@@ -335,18 +353,21 @@ def report(campaign_ids=None, top=5):
             if campaign_ids and camp["id"] not in campaign_ids:
                 continue
             posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE campaign_id=?", (camp["id"],))]
+            eng = lambda p: sum(p[k] for k in METRICS[1:])  # noqa: E731
             days = (by_users or {}).get(camp["id"], []) if by_users is not None else \
                 [dict(r) for r in c.execute("SELECT * FROM days WHERE campaign_id=?", (camp["id"],))]
-            eng = lambda p: sum(p[k] for k in METRICS[1:])  # noqa: E731
-            x_spend = sum(p["budget"] or 0 for p in posts)
+            x_spend = sum(p["budget"] or 0 for p in posts)          # all paid posts, any platform
             total = x_spend + (camp["other_spend"] or 0)
+            spend_v = sum(p["budget"] or 0 for p in posts if p["views"])   # CPM only over posts with views
+            spend_e = sum(p["budget"] or 0 for p in posts if eng(p))
             views = sum(p["views"] for p in posts)
             e_all, e_v = sum(eng(p) for p in posts), sum(eng(p) for p in posts if p["views"])
             regs = sum(d["registrations"] for d in days)
             api = sum(d["api_users"] for d in days)
             creators = {}
             for p in posts:
-                a = creators.setdefault(p["author"] or p["url"], {"creator": p["author"], "posts": 0, "cost": 0, "views": 0, "engagements": 0})
+                a = creators.setdefault(p["author"] or p["url"], {"creator": p["author"] or p["url"], "platform": p["platform"] or "x",
+                                                                    "posts": 0, "cost": 0, "views": 0, "engagements": 0})
                 a["posts"] += 1
                 a["cost"] += p["budget"] or 0
                 a["views"] += p["views"]
@@ -364,16 +385,19 @@ def report(campaign_ids=None, top=5):
             out.append({
                 "id": camp["id"], "name": camp["name"], "posts": len(posts),
                 "first_post_utc": min((p["created_at"] for p in posts if p["created_at"]), default=None),
-                "x_spend": x_spend, "other_spend": camp["other_spend"] or 0, "total_budget": total,
+                "posts_spend": x_spend, "by_platform": {pl: sum(p["budget"] or 0 for p in posts if (p["platform"] or "x") == pl)
+                                                        for pl in sorted({p["platform"] or "x" for p in posts})},
+                "other_spend": camp["other_spend"] or 0, "total_budget": total,
                 "avg_cost_per_post": r2(dv(x_spend, len(posts))),
                 "views": views, "engagements": e_all, "er_pct": r2(dv(e_v * 100, views)),
-                "avg_cpm": r2(dv(x_spend * 1000, views)), "avg_cpe": r2(dv(x_spend, e_all)),
+                "avg_cpm": r2(dv(spend_v * 1000, views)), "avg_cpe": r2(dv(spend_e, e_all)),
                 "registrations": regs, "api_users": api,
                 "cost_per_registration": r2(dv(total, regs)), "cost_per_api_user": r2(dv(total, api)),
                 "reg_to_api_pct": r2(dv(api * 100, regs)), "regs_per_1k_views": r2(dv(regs * 1000, views)),
                 "flagged_users": sum(d.get("flagged", 0) for d in days),
                 "daily": days,
                 "top": ranked[:top], "bottom": ranked[::-1][:top] if top else [],
+                "missing_views": [a["creator"] for a in creators.values() if a["cost"] and not a["views"]],
                 "unpriced": [{"creator": a["creator"], "views": a["views"]} for a in creators.values() if not a["cost"]],
                 "flags": [f"{a['creator']}: ER {a['er_pct']}% on {a['views']:,} views — check view quality"
                           for a in paid if a["er_pct"] < 0.3 and a["views"] > 5000],
@@ -389,14 +413,14 @@ def export_csv(campaign_id):
     w = csv.writer(buf)
     camp = next(c for c in s["campaigns"] if c["id"] == campaign_id)
     x_spend = sum(p["budget"] or 0 for p in s["posts"])
-    w.writerow(["x_posts_spend", "other_spend", "other_note", "total_budget"])
+    w.writerow(["posts_spend", "other_spend", "other_note", "total_budget"])
     w.writerow([x_spend, camp["other_spend"] or 0, camp["other_note"] or "", x_spend + (camp["other_spend"] or 0)])
     w.writerow([])
-    w.writerow(["day", "url", "author", "note", "budget", *METRICS, "engagements", "er_pct", "cpm", "cpe"])
+    w.writerow(["day", "platform", "url", "author", "note", "budget", *METRICS, "engagements", "er_pct", "cpm", "cpe"])
     for p in s["posts"]:
         eng = sum(p[k] for k in METRICS[1:])
         v, b = p["views"], p["budget"] or 0
-        w.writerow([p["day"], p["url"], p["author"], p["note"] or "", b, *[p[k] for k in METRICS], eng,
+        w.writerow([p["day"], p["platform"] or "x", p["url"], p["author"], p["note"] or "", b, *[p[k] for k in METRICS], eng,
                     round(eng / v * 100, 3) if v else "", round(b / v * 1000, 2) if v else "",
                     round(b / eng, 3) if eng else ""])
     w.writerow([])
@@ -654,24 +678,27 @@ class Handler(BaseHTTPRequestHandler):
                     raw, budget, note = it["url"].strip(), float(it.get("budget") or 0), it.get("note") or None
                     if not raw:
                         continue
-                    tid = tweet_id_from(raw)
-                    if not tid:
+                    found = platforms.detect(raw)
+                    if not found:
                         invalid.append(raw)
                         continue
-                    cur = c.execute("INSERT OR IGNORE INTO posts(campaign_id, url, tweet_id, budget, note) VALUES (?,?,?,?,?)",
-                                    (cid, raw.split("?")[0], tid, budget, note))
+                    plat, key, url = found
+                    cur = c.execute("INSERT OR IGNORE INTO posts(campaign_id, url, tweet_id, budget, note, platform) VALUES (?,?,?,?,?,?)",
+                                    (cid, url, key, budget, note, plat))
                     if not cur.rowcount:
                         # Already tracked: update its cost/note from the new paste
                         c.execute("UPDATE posts SET budget=?, note=COALESCE(?, note) WHERE campaign_id=? AND tweet_id=?",
-                                  (budget, note, cid, tid))
+                                  (budget, note, cid, key))
                         skipped += 1
                         continue
                     added += 1
-                    to_fetch.append((cur.lastrowid, tid))
+                    to_fetch.append({"id": cur.lastrowid, "tweet_id": key, "platform": plat, "url": url})
                 result = {"added": added, "skipped": skipped, "invalid": invalid}
 
             elif path == "/api/posts/update":
-                fields = {k: b[k] for k in ("budget", "day", "note") if k in b}
+                row = c.execute("SELECT platform FROM posts WHERE id=?", (b["id"],)).fetchone()
+                typed = [k for k in METRICS if k not in platforms.AUTO_METRICS[(row["platform"] if row else None) or "x"]]
+                fields = {k: b[k] for k in ("budget", "day", "note", *typed) if k in b}
                 if fields:
                     c.execute(f"UPDATE posts SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?",
                               (*fields.values(), b["id"]))
@@ -681,8 +708,8 @@ class Handler(BaseHTTPRequestHandler):
 
             elif path == "/api/refresh":
                 ids = set(b.get("ids") or [])
-                rows = c.execute("SELECT id, tweet_id FROM posts WHERE campaign_id=?", (b["campaign_id"],)).fetchall()
-                to_fetch = [(r["id"], r["tweet_id"]) for r in rows if not ids or r["id"] in ids]
+                rows = c.execute("SELECT id, tweet_id, platform, url FROM posts WHERE campaign_id=?", (b["campaign_id"],)).fetchall()
+                to_fetch = [r for r in rows if (not ids or r["id"] in ids) and (r["platform"] or "x") in ("x", "linkedin")]
                 result = {"queued": len(to_fetch)}
 
             elif path == "/api/days":
@@ -697,8 +724,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 return self._send(404, {"error": "not found"})
 
-        for post_id, tid in to_fetch:          # after commit, so the worker sees the rows
-            enqueue(post_id, tid)
+        enqueue_rows(to_fetch)                 # after commit, so the worker sees the rows
         self._send(200, result)
 
 

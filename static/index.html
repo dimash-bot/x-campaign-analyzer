@@ -54,6 +54,10 @@ td input { width: 90px; text-align: right; padding: 4px 6px; }
 td input[type=date] { width: 140px; text-align: left; }
 .post-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .post-cell a { color: var(--text); text-decoration: none; font-weight: 600; }
+.badge { display: inline-block; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 1px 6px; border-radius: 5px;
+  margin-right: 5px; vertical-align: 1px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+td input.metric { width: 80px; }
+td input.metric.need { border-color: var(--accent); }
 .post-cell a:hover { color: var(--accent); }
 .post-cell .t { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .err { color: var(--bad); font-size: 12px; }
@@ -109,7 +113,7 @@ td input.note { width: 170px; text-align: left; }
     </div>
     <div class="hint">Sheet rows (amount · note · link) are parsed automatically; one amount covering several links is split evenly. Re-pasting a post updates its cost.</div>
     <div class="other">
-      <label class="muted" for="otherSpend">Other spend, not on X ($)</label>
+      <label class="muted" for="otherSpend">Other spend, not a post ($)</label>
       <input id="otherSpend" type="number" min="0" step="0.01" placeholder="0" style="width:110px">
       <input id="otherNote" placeholder="e.g. LinkedIn post" style="flex:1; min-width:180px">
       <span class="hint" style="margin:0">Counts toward total budget and $/registration, not toward CPM.</span>
@@ -121,7 +125,7 @@ td input.note { width: 170px; text-align: left; }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th class="l">Post</th><th class="l">Note</th><th class="l">Day</th><th>Cost $</th><th>Views</th><th>Likes</th><th>RTs</th><th>Quotes</th>
+          <th class="l">Post</th><th class="l">Note</th><th class="l">Day</th><th>Cost $</th><th>Views</th><th>Likes</th><th>Reposts</th><th>Quotes</th>
           <th>Replies</th><th>Bookm.</th><th>Engag.</th><th>ER</th><th>CPM</th><th>CPE</th><th></th>
         </tr></thead>
         <tbody id="postsBody"></tbody>
@@ -225,10 +229,23 @@ async function load() {
   pollTimer = setTimeout(load, S.pending.length || editing() ? 2000 : 30000);
 }
 
+// Platforms: which metrics are fetched automatically; the rest are typed into the table (mirrors platforms.py)
+const PLAT = { x: "X", linkedin: "LinkedIn", other: "Other" };
+const AUTO = { x: ["views", ...ENG], linkedin: ["likes", "replies"], other: [] };
+const METRIC_HINT = { views: "views / impressions", retweets: "reposts / shares", replies: "replies / comments" };
+function metricCell(p, m) {
+  if (AUTO[p.platform || "x"].includes(m)) return `<td>${fmtInt(p[m])}</td>`;
+  const need = m === "views" && !p.views && p.budget ? " need" : "";
+  return `<td><input type="number" min="0" class="metric${need}" value="${p[m] || ""}" placeholder="—" title="Type ${METRIC_HINT[m] || m} (not public on ${PLAT[p.platform]})" data-post="${p.id}" data-f="${m}"></td>`;
+}
+
 function aggregateDays() {
   const m = {};
-  const row = (d) => (m[d] ||= { day: d, posts: 0, spend: 0, views: 0, eng: 0, engV: 0, reg: 0, api: 0, hasEntry: false });
-  for (const p of S.posts) { const r = row(p.day || "—"); r.posts++; r.spend += p.budget || 0; r.views += p.views || 0; r.eng += eng(p); if (p.views) r.engV += eng(p); }
+  const row = (d) => (m[d] ||= { day: d, posts: 0, spend: 0, spendV: 0, views: 0, eng: 0, engV: 0, reg: 0, api: 0, hasEntry: false });
+  for (const p of S.posts) {
+    const r = row(p.day || "—"); r.posts++; r.spend += p.budget || 0; r.views += p.views || 0; r.eng += eng(p);
+    if (p.views) { r.engV += eng(p); r.spendV += p.budget || 0; }
+  }
   for (const d of S.days) { const r = row(d.day); r.reg = d.registrations; r.api = d.api_users; r.hasEntry = true; }
   return Object.values(m).sort((a, b) => a.day.localeCompare(b.day));
 }
@@ -238,8 +255,15 @@ function render() {
   $("exportCsv").href = "/api/export.csv?campaign=" + cid;
 
   const P = S.posts;
-  const T = { spend: 0, views: 0, eng: 0, engV: 0 };  // engV: engagements on posts that report views (for ER)
-  for (const p of P) { T.spend += p.budget || 0; T.views += p.views || 0; T.eng += eng(p); if (p.views) T.engV += eng(p); }
+  // CPM/ER/CPE only use posts that have the number (a LinkedIn post without impressions yet doesn't skew them)
+  const T = { spend: 0, views: 0, eng: 0, engV: 0, spendV: 0, spendE: 0 };
+  for (const p of P) {
+    T.spend += p.budget || 0; T.views += p.views || 0; T.eng += eng(p);
+    if (p.views) { T.engV += eng(p); T.spendV += p.budget || 0; }
+    if (eng(p)) T.spendE += p.budget || 0;
+  }
+  const plats = [...new Set(P.map((p) => p.platform || "x"))];
+  const missingViews = P.filter((p) => !p.views && p.budget && (p.platform || "x") !== "x").length;
   const days = aggregateDays();
   const reg = days.reduce((s, d) => s + d.reg, 0), apiU = days.reduce((s, d) => s + d.api, 0);
 
@@ -249,13 +273,14 @@ function render() {
   if (document.activeElement !== $("otherNote")) $("otherNote").value = camp.other_note || "";
   const k = (l, v, s = "", cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   $("kpis").innerHTML = [
-    k("Total budget", fmt$(total, 0), other ? `${fmt$(T.spend, 0)} X · ${fmt$(other, 0)} other` : "all on X"),
-    k("Avg cost / post", fmt$(div(T.spend, P.length), 0), `${P.length} X post${P.length === 1 ? "" : "s"}`),
+    k("Total budget", fmt$(total, 0), [...plats.map((pl) => `${fmt$(P.filter((p) => (p.platform || "x") === pl).reduce((s, p) => s + (p.budget || 0), 0), 0)} ${PLAT[pl]}`),
+      ...(other ? [`${fmt$(other, 0)} other`] : [])].join(" · ")),
+    k("Avg cost / post", fmt$(div(T.spend, P.length), 0), `${P.length} post${P.length === 1 ? "" : "s"}`),
     k("Views", fmtN(T.views), fmtN(div(T.views, P.length)) + " avg / post"),
     k("Engagements", fmtN(T.eng)),
     k("ER", fmtPct(div(T.engV, T.views)), "engagements ÷ views"),
-    k("Avg CPM", fmt$(div(T.spend * 1000, T.views)), "X spend ÷ views × 1K"),
-    k("Avg CPE", fmt$(div(T.spend, T.eng), 3), "X spend ÷ engagements"),
+    k("Avg CPM", fmt$(div(T.spendV * 1000, T.views)), missingViews ? `${missingViews} post(s) still need views` : "post spend ÷ views × 1K"),
+    k("Avg CPE", fmt$(div(T.spendE, T.eng), 3), "post spend ÷ engagements"),
     k("Registrations", fmtInt(reg), (div(reg * 1000, T.views)?.toFixed(2) ?? "—") + " per 1K views"),
     k("Cost / registration", fmt$(div(total, reg)), "total budget ÷ registrations", "hl"),
     k("API users", fmtInt(apiU), "made ≥1 API request"),
@@ -267,21 +292,20 @@ function render() {
   $("postsBody").innerHTML = P.length ? P.map((p) => {
     const e = eng(p);
     return `<tr>
-      <td class="post-cell l"><a href="${esc(p.url)}" target="_blank" rel="noopener">@${esc(p.author || "…")}</a>
+      <td class="post-cell l"><span class="badge">${PLAT[p.platform || "x"]}</span><a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || "…")}</a>
         <div class="t" title="${esc(p.text)}">${esc((p.text || "").slice(0, 70))}</div>
         ${S.pending.includes(p.id) ? `<div class="fetching">⟳ fetching metrics…</div>` : p.fetch_error ? `<div class="err">⚠ ${esc(p.fetch_error)}</div>` : ""}</td>
       <td class="l"><input class="note" value="${esc(p.note || "")}" data-post="${p.id}" data-f="note" placeholder="payment note"></td>
       <td class="l"><input type="date" value="${esc(p.day || "")}" data-post="${p.id}" data-f="day"></td>
       <td><input type="number" min="0" step="0.01" value="${p.budget || 0}" data-post="${p.id}" data-f="budget"></td>
-      <td>${fmtInt(p.views)}</td><td>${fmtInt(p.likes)}</td><td>${fmtInt(p.retweets)}</td><td>${fmtInt(p.quotes)}</td>
-      <td>${fmtInt(p.replies)}</td><td>${fmtInt(p.bookmarks)}</td><td>${fmtInt(e)}</td>
+      ${["views", ...ENG].map((m) => metricCell(p, m)).join("")}<td>${fmtInt(e)}</td>
       <td>${fmtPct(div(e, p.views))}</td><td>${fmt$(div((p.budget || 0) * 1000, p.views))}</td><td>${fmt$(div(p.budget || 0, e), 3)}</td>
       <td><button class="ghost" title="Refresh" data-refresh="${p.id}">↻</button><button class="ghost" title="Remove" data-del-post="${p.id}">✕</button></td>
     </tr>`;
   }).join("") : `<tr><td colspan="15" class="l muted">No posts yet — paste links above.</td></tr>`;
   $("postsFoot").innerHTML = P.length ? `<tr><td class="l">Total</td><td></td><td></td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td>
     ${ENG.map((m) => `<td>${fmtInt(P.reduce((s, p) => s + (p[m] || 0), 0))}</td>`).join("")}<td>${fmtInt(T.eng)}</td>
-    <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spend * 1000, T.views))}</td><td>${fmt$(div(T.spend, T.eng), 3)}</td><td></td></tr>` : "";
+    <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spendV * 1000, T.views))}</td><td>${fmt$(div(T.spendE, T.eng), 3)}</td><td></td></tr>` : "";
 
   // Days table — computed from the imported users when there are any, otherwise typed in by hand
   const fromUsers = S.days_source === "users";
@@ -289,7 +313,7 @@ function render() {
   $("usersStatus").textContent = fromUsers ? `${fmtInt(S.users_total)} users imported — each user is assigned to the latest wave whose first post came before their signup.` : "";
   $("daysBody").innerHTML = days.length ? days.map((d) => `<tr>
       <td class="l">${esc(d.day)}</td><td>${d.posts}</td><td>${fmt$(d.spend)}</td><td>${fmtInt(d.views)}</td><td>${fmtInt(d.eng)}</td>
-      <td>${fmtPct(div(d.engV, d.views))}</td><td>${fmt$(div(d.spend * 1000, d.views))}</td>
+      <td>${fmtPct(div(d.engV, d.views))}</td><td>${fmt$(div(d.spendV * 1000, d.views))}</td>
       <td>${d.day === "—" ? "" : fromUsers ? fmtInt(d.reg) : `<input type="number" min="0" value="${d.reg}" data-day="${d.day}" data-f="registrations">`}</td>
       <td>${d.day === "—" ? "" : fromUsers ? fmtInt(d.api) : `<input type="number" min="0" value="${d.api}" data-day="${d.day}" data-f="api_users">`}</td>
       <td>${d.spend ? fmt$(div(d.spend, d.reg)) : "—"}</td><td>${d.spend ? fmt$(div(d.spend, d.api)) : "—"}</td><td>${fmtPct(div(d.api, d.reg), 1)}</td>
@@ -297,7 +321,7 @@ function render() {
       <td>${d.hasEntry && !d.posts && !fromUsers ? `<button class="ghost" title="Remove day" data-del-day="${d.day}">✕</button>` : ""}</td>
     </tr>`).join("") : `<tr><td colspan="14" class="l muted">Days appear automatically once posts are added.</td></tr>`;
   $("daysFoot").innerHTML = days.length ? `<tr><td class="l">Total</td><td>${P.length}</td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td><td>${fmtInt(T.eng)}</td>
-    <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spend * 1000, T.views))}</td><td>${fmtInt(reg)}</td><td>${fmtInt(apiU)}</td>
+    <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spendV * 1000, T.views))}</td><td>${fmtInt(reg)}</td><td>${fmtInt(apiU)}</td>
     <td title="total budget incl. other spend">${fmt$(div(total, reg))}</td><td title="total budget incl. other spend">${fmt$(div(total, apiU))}</td><td>${fmtPct(div(apiU, reg), 1)}</td>
     <td>${div(reg * 1000, T.views)?.toFixed(2) ?? "—"}</td><td></td></tr>` : "";
 }
@@ -307,6 +331,9 @@ function render() {
 // row is its cost, split evenly across the row's post links; the remaining cells become the note.
 const X_RE = /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:x|twitter)\.com\/\w+\/status\/\d+[^\s"]*/g;
 const X_ANY_RE = /(?:https?:\/\/)?(?:www\.)?(?:x|twitter)\.com\/\S*/g;
+// Post links on other platforms (profile links like linkedin.com/in/... are not posts). Mirrors platforms.py.
+const OTHER_POST_RE = /(?:https?:\/\/)?(?:www\.|m\.)?(?:linkedin\.com\/(?:posts|feed\/update|pulse)\/|lnkd\.in\/|youtube\.com\/(?:watch|shorts\/)|youtu\.be\/|tiktok\.com\/@[^\/\s]+\/video\/|instagram\.com\/(?:p|reel)\/|reddit\.com\/r\/[^\/\s]+\/comments\/|threads\.(?:net|com)\/@[^\/\s]+\/post\/|bsky\.app\/profile\/[^\/\s]+\/post\/)[^\s"]*/gi;
+const PROFILE_RE = /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/(?:in|company)\/[^\s"]*/gi;
 function parsePaste(text, defaultBudget) {
   const rows = [];
   for (const line of text.split(/\r?\n/)) {
@@ -314,25 +341,32 @@ function parsePaste(text, defaultBudget) {
     if (last != null && (last.split('"').length - 1) % 2 === 1) rows[rows.length - 1] = last + "\n" + line;
     else if (line.trim()) rows.push(line);
   }
-  const items = [], nonX = [], noPost = [];
+  // A line holding only post link(s) belongs to the row above when that row has a price but no post link yet
+  // (sheets where the link cell wrapped onto its own line).
+  const isPost = (t) => new RegExp(X_RE.source, "i").test(t) || new RegExp(OTHER_POST_RE.source, "i").test(t);
+  for (let i = rows.length - 1; i > 0; i--) {
+    const linkOnly = !rows[i].includes("\t") && !/\$\s*\d/.test(rows[i]) && isPost(rows[i]);
+    if (linkOnly && /\$\s*\d/.test(rows[i - 1]) && !isPost(rows[i - 1])) { rows[i - 1] += "\t" + rows[i]; rows.splice(i, 1); }
+  }
+  const items = [], noPost = [];
   for (const raw of rows) {
     const byId = new Map();
     for (const u of raw.match(X_RE) || []) byId.set(u.match(/status\/(\d+)/)[1], u);
-    const xs = [...byId.values()];
+    for (const u of raw.match(OTHER_POST_RE) || []) byId.set(u.replace(/^https?:\/\/(www\.)?/, "").split("?")[0].toLowerCase(), u);
+    const xs = [...byId.values()];   // every post link in the row, any platform
     const amt = raw.match(/\$\s*([\d,]+(?:\.\d+)?)/);
     const budget = amt ? parseFloat(amt[1].replace(/,/g, "")) : defaultBudget;
-    const others = (raw.replace(X_ANY_RE, " ").match(/https?:\/\/[^\s"]+/g) || []);
+
     const note = raw.split("\t")
-      .map((c) => c.replace(/"/g, " ").replace(X_ANY_RE, " ").replace(/\$\s*[\d,]+(?:\.\d+)?/, " ")
+      .map((c) => c.replace(/"/g, " ").replace(X_ANY_RE, " ").replace(OTHER_POST_RE, " ").replace(PROFILE_RE, " ").replace(/\$\s*[\d,]+(?:\.\d+)?/, " ")
         .replace(/(^|\s)\d+[.)](?=\s|$|h)/g, " ").replace(/\s+/g, " ").trim())
-      .filter((c) => c && !/^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?$/i.test(c))       // posting date: X gives the real one
+      .filter((c) => c && !/^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?$/i.test(c))       // posting date: fetched from the post
       .map((c) => (c === "TRUE" ? "✓" : c === "FALSE" ? "✗" : c))
       .join(" · ");
     if (xs.length) xs.forEach((u) => items.push({ url: u.startsWith("http") ? u : "https://" + u, budget: budget / xs.length, note }));
-    else if (others.length) nonX.push({ budget, note, link: others[0] });
     else noPost.push({ budget, who: (raw.match(/(?:x|twitter)\.com\/(\w+)/) || [])[1] || raw.slice(0, 40) });
   }
-  return { items, nonX, noPost };
+  return { items, noPost };
 }
 
 // In-page replacements for prompt()/confirm() — embedded browsers often block those, and some don't
@@ -367,19 +401,11 @@ async function busy(btn, label, fn) {
 }
 
 $("addPosts").onclick = (ev) => busy(ev.target, "Fetching…", async () => {
-  const { items, nonX, noPost } = parsePaste($("urls").value, Number($("batchBudget").value) || 0);
-  if (!items.length && !nonX.length) return toast("No X post links found");
-  const r = items.length ? await api("/api/posts", { campaign_id: cid, items }) : { added: 0, skipped: 0, invalid: [] };
+  const { items, noPost } = parsePaste($("urls").value, Number($("batchBudget").value) || 0);
+  if (!items.length) return toast(noPost.length ? "No post links found (profile and payment links are skipped)" : "Paste at least one post link");
+  const r = await api("/api/posts", { campaign_id: cid, items });
   let msg = `Added ${r.added}${r.added ? " — fetching metrics in the background" : ""}` + (r.skipped ? ` · updated ${r.skipped} already tracked` : "");
-  if (nonX.length) {
-    const amt = nonX.reduce((s, x) => s + x.budget, 0);
-    const camp = S.campaigns.find((c) => c.id === cid) || {};
-    if (amt && await askConfirm(`${nonX.length} non-X link(s) worth ${fmt$(amt)}:\n${nonX.map((x) => `${fmt$(x.budget)}  ${x.link}`).join("\n")}\n\nAdd to "Other spend"?`)) {
-      const note = [camp.other_note, ...nonX.map((x) => x.note || x.link)].filter(Boolean).join("; ");
-      await api("/api/campaigns/other_spend", { id: cid, other_spend: (camp.other_spend || 0) + amt, other_note: note });
-      msg += ` · ${fmt$(amt)} added to other spend`;
-    } else msg += ` · ${nonX.length} non-X link(s) skipped`;
-  }
+  if (r.invalid.length) msg += ` · ${r.invalid.length} link(s) not recognised`;
   if (noPost.length) msg += ` · no post link yet: ${noPost.map((x) => `${x.who} (${fmt$(x.budget, 0)})`).join(", ")}`;
   $("urls").value = "";
   $("status").textContent = msg;
@@ -393,7 +419,8 @@ $("refreshAll").onclick = (ev) => busy(ev.target, "Refreshing…", async () => {
 document.addEventListener("change", async (ev) => {
   const el = ev.target;
   if (el.dataset.post) {
-    const v = el.dataset.f === "budget" ? Number(el.value) || 0 : el.value.trim() || null;
+    const numeric = el.dataset.f === "budget" || ["views", ...ENG].includes(el.dataset.f);
+    const v = numeric ? Math.max(0, Number(el.value) || 0) : el.value.trim() || null;
     await api("/api/posts/update", { id: Number(el.dataset.post), [el.dataset.f]: v });
     await load();
   } else if (el.dataset.day) {

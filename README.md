@@ -1,7 +1,8 @@
 # X Campaign Analyzer
 
-Track paid X (Twitter) creator campaigns by wave: paste post links (or rows straight from the payment
-sheet) → the server pulls exact engagement metrics → enter daily registrations and API-key users →
+Track paid creator campaigns by wave — X, LinkedIn and other platforms: paste post links (or rows straight
+from the payment sheet) → the server pulls public engagement metrics (X: everything; LinkedIn: reactions +
+comments, impressions typed in; others: typed in) → enter daily registrations and API-key users →
 see ER, CPM, CPE, cost per registration, cost per API user and reg → API activation.
 
 ## How it works
