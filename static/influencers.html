@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Influencers</title>
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee; --border: #e3e3de;
+  --text: #1a1a18; --muted: #6b6b66; --accent: #1d6fe0; --accent-ink: #fff; --accent-soft: #e8f0fc;
+  --good: #16794a; --bad: #b42318; --warn-bg: #fff6e6; --warn-border: #f0d9a8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
+    --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a; --accent-soft: #1c2a40;
+    --good: #4cc38a; --bad: #ff7a6b; --warn-bg: #2e2412; --warn-border: #5a4520;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+nav { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+nav a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 7px; font-weight: 500; }
+nav a.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.me { color: var(--muted); font-size: 12.5px; }
+.me a { color: inherit; }
+select, input, button { font: inherit; color: inherit; }
+select, input { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+button { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover { background: var(--surface-2); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.kpi .l { color: var(--muted); font-size: 12px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; letter-spacing: -0.01em; }
+.kpi .s { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.notice { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
+.notice code { font-size: 12px; background: var(--surface); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+.toolbar { margin-bottom: 12px; }
+.chips button { padding: 4px 10px; border-radius: 999px; font-size: 12.5px; }
+.chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 8px 9px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; vertical-align: middle; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+th.l, td.l { text-align: left; }
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--text); }
+th.sorted { color: var(--accent); }
+th.sorted::after { content: " ↓"; }
+th.sorted.asc::after { content: " ↑"; }
+th .grp { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); opacity: .8; }
+td.rank { color: var(--muted); font-size: 12px; width: 1%; }
+.who { display: flex; gap: 10px; align-items: center; min-width: 210px; }
+.who img, .who .ph { width: 32px; height: 32px; border-radius: 50%; flex: none; background: var(--surface-2); border: 1px solid var(--border); object-fit: cover; }
+.who .ph { display: grid; place-items: center; font-size: 12px; color: var(--muted); font-weight: 600; }
+.who a { color: var(--text); text-decoration: none; font-weight: 600; }
+.who a:hover { color: var(--accent); }
+.who small { display: block; color: var(--muted); font-size: 12px; }
+.badge { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 5px; margin-left: 4px;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); vertical-align: 1px; }
+.wavechip { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); margin-right: 3px; }
+.good { color: var(--good); font-weight: 650; }
+.bad { color: var(--bad); }
+.muted { color: var(--muted); }
+.fetching { color: var(--accent); font-size: 11.5px; }
+.err { color: var(--muted); font-size: 11.5px; cursor: help; }
+td input { width: 90px; text-align: right; padding: 3px 6px; }
+.colsep { border-left: 1px solid var(--border); }
+.legend { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }
+.legend b { color: var(--text); font-weight: 600; }
+.empty { color: var(--muted); padding: 20px 0; text-align: left; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="row" style="gap:14px">
+      <h1>X Campaign Analyzer</h1>
+      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers" class="on">Influencers</a></nav>
+    </div>
+    <span class="me" id="me"></span>
+  </header>
+
+  <div class="notice" id="loginNotice" hidden>
+    <b>Median views and their normal ER need a logged-in X session.</b> Followers come from X anyway. To fill the rest, set the
+    <code>X_AUTH_TOKEN</code> and <code>X_CT0</code> cookies of a spare X account on Railway, or ask Claude through the connector
+    (it can look the stats up and save them). You can also type numbers into the empty cells.
+  </div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <h2>All influencers</h2>
+    <p class="sub">Every creator we've paid, across waves. Profile and "their normal" numbers come from their recent posts (paid posts excluded); "with us" is how our paid posts did.</p>
+    <div class="row toolbar">
+      <input id="q" type="search" placeholder="Search name or @handle" style="min-width:200px">
+      <select id="wave"><option value="">All waves</option></select>
+      <select id="plat"><option value="">All platforms</option><option value="x">X</option><option value="linkedin">LinkedIn</option><option value="other">Other</option></select>
+      <span class="row chips" id="chips">
+        <button data-p="followers">Most followers</button>
+        <button data-p="vs_median">Beat their median</button>
+        <button data-p="reach_pct">Best reach</button>
+        <button data-p="er_pct">Best ER with us</button>
+        <button data-p="cpm">Cheapest CPM</button>
+        <button data-p="price_per_1k_followers">Cheapest per follower</button>
+        <button data-p="paid">Most paid</button>
+      </span>
+      <span style="flex:1"></span>
+      <button id="refresh" title="Re-fetch followers and recent posts from X">↻ Refresh profiles</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead id="head"><tr>
+          <th class="l">#</th>
+          <th class="l" data-sort="name">Creator</th>
+          <th data-sort="followers" class="colsep"><span class="grp">Profile</span>Followers</th>
+          <th data-sort="median_views"><span class="grp">Their normal</span>Median views</th>
+          <th data-sort="median_er"><span class="grp">Their normal</span>ER</th>
+          <th data-sort="posts" class="colsep"><span class="grp">With us</span>Posts</th>
+          <th data-sort="paid"><span class="grp">With us</span>Paid</th>
+          <th data-sort="avg_views"><span class="grp">With us</span>Avg views</th>
+          <th data-sort="vs_median"><span class="grp">With us</span>vs median</th>
+          <th data-sort="reach_pct"><span class="grp">With us</span>Reach</th>
+          <th data-sort="er_pct"><span class="grp">With us</span>ER</th>
+          <th data-sort="cpm" class="colsep"><span class="grp">Cost</span>CPM</th>
+          <th data-sort="cpe"><span class="grp">Cost</span>CPE</th>
+          <th data-sort="price_per_1k_followers"><span class="grp">Cost</span>$ / 1K followers</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <b>Median views / ER (their normal)</b>: median over their last ~30 own posts, excluding the ones we paid for.
+      <b>vs median</b>: avg views of our paid post ÷ their median (above 1× = our post beat their usual post).
+      <b>Reach</b>: avg views of our post ÷ followers. <b>$ / 1K followers</b>: price per post ÷ followers × 1,000 (rate-card benchmark).
+      CPM, ER and CPE only count posts that have views.
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ok = (n) => n != null && isFinite(n);
+const fmtN = (n) => !ok(n) ? "—" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
+const fmt$ = (n, d = 2) => !ok(n) ? "—" : "$" + n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (n, d = 2) => !ok(n) ? "—" : n.toFixed(d) + "%";
+const med = (a) => { const v = a.filter(ok).sort((x, y) => x - y); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null; };
+const PLAT = { x: "X", linkedin: "LinkedIn", other: "Other" };
+let D = { creators: [], pending: [], x_login: false }, timer = null;
+
+let sort = { key: "paid", dir: "desc" };
+try { sort = JSON.parse(localStorage.getItem("xca_csort")) || sort; } catch (e) {}
+const LOW_FIRST = new Set(["name", "cpm", "cpe", "price_per_1k_followers"]);
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+  return r.json();
+}
+
+function visible() {
+  const q = $("q").value.trim().toLowerCase(), w = $("wave").value, p = $("plat").value;
+  return D.creators.filter((c) => (!q || `${c.name} ${c.handle}`.toLowerCase().includes(q)) && (!w || c.waves.includes(w)) && (!p || c.platform === p));
+}
+
+function sorted(list) {
+  const k = sort.key, m = sort.dir === "asc" ? 1 : -1;
+  const val = (c) => (k === "name" ? (c.name || "").toLowerCase() : c[k]);
+  return [...list].sort((a, b) => {
+    const x = val(a), y = val(b), nx = x == null || x === "", ny = y == null || y === "";
+    if (nx || ny) return nx === ny ? 0 : nx ? 1 : -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * m;
+  });
+}
+
+// A number we have, or an input to type it when X can't provide it (LinkedIn, or no X login yet)
+function cell(c, f, fmt, cls = "") {
+  if (ok(c[f])) return `<td class="${cls}">${fmt(c[f])}</td>`;
+  const pend = D.pending.includes(c.key);
+  if (pend && f === "followers") return `<td class="${cls}"><span class="fetching">fetching…</span></td>`;
+  const editable = f === "followers" ? c.platform !== "x" : true;
+  return `<td class="${cls}">${editable ? `<input type="number" min="0" step="any" placeholder="—" data-key="${esc(c.key)}" data-f="${f}" title="Type it in (e.g. from their analytics)">` : "—"}</td>`;
+}
+
+function render() {
+  const W = [...new Set(D.creators.flatMap((c) => c.waves))].sort();
+  const cur = $("wave").value;
+  $("wave").innerHTML = `<option value="">All waves</option>` + W.map((w) => `<option ${w === cur ? "selected" : ""}>${esc(w)}</option>`).join("");
+  $("loginNotice").hidden = D.x_login || !D.creators.some((c) => c.platform === "x" && !ok(c.median_views));
+
+  const V = visible();
+  const k = (l, v, s = "") => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  const withMed = V.filter((c) => ok(c.vs_median));
+  $("kpis").innerHTML = [
+    k("Influencers", V.length.toLocaleString(), `${V.filter((c) => c.waves.length > 1).length} used in more than one wave`),
+    k("Combined followers", fmtN(V.reduce((s, c) => s + (c.followers || 0), 0)), `median ${fmtN(med(V.map((c) => c.followers)))} each`),
+    k("Paid", fmt$(V.reduce((s, c) => s + c.paid, 0), 0), `median ${fmt$(med(V.filter((c) => c.paid).map((c) => c.paid / c.posts)), 0)} per post`),
+    k("Median CPM", fmt$(med(V.map((c) => c.cpm))), "across creators"),
+    k("Median $ / 1K followers", fmt$(med(V.map((c) => c.price_per_1k_followers))), "price per post"),
+    k("Beat their median", withMed.length ? `${withMed.filter((c) => c.vs_median >= 1).length} / ${withMed.length}` : "—",
+      withMed.length ? "our post outperformed their usual post" : "needs median views"),
+  ].join("");
+
+  document.querySelectorAll("#head th[data-sort]").forEach((th) => {
+    th.classList.toggle("sorted", th.dataset.sort === sort.key);
+    th.classList.toggle("asc", th.dataset.sort === sort.key && sort.dir === "asc");
+  });
+  document.querySelectorAll("#chips button").forEach((b) => b.classList.toggle("on", b.dataset.p === sort.key));
+
+  $("rows").innerHTML = V.length ? sorted(V).map((c, i) => {
+    const link = c.platform === "x" ? `https://x.com/${encodeURIComponent(c.handle)}` : c.post_urls[0];
+    const initials = (c.name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+    const vm = c.vs_median;
+    const note = c.profile_error && !D.pending.includes(c.key) ? `<span class="err" title="${esc(c.profile_error)}"> ⓘ</span>` : "";
+    return `<tr>
+      <td class="rank l">${i + 1}</td>
+      <td class="l"><div class="who">
+        ${c.avatar ? `<img src="${esc(c.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="ph">${esc(initials)}</span>`}
+        <div><a href="${esc(link)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.verified ? ` <span title="Verified" class="muted">✓</span>` : ""}<span class="badge">${PLAT[c.platform]}</span>${note}
+          <small>${c.platform === "x" ? "@" + esc(c.handle) + " · " : ""}${c.waves.map((w) => `<span class="wavechip">${esc(w)}</span>`).join("")}</small></div>
+      </div></td>
+      ${cell(c, "followers", fmtN, "colsep")}
+      ${cell(c, "median_views", fmtN)}
+      ${cell(c, "median_er", (v) => pct(v))}
+      <td class="colsep">${c.posts}</td>
+      <td>${fmt$(c.paid, 0)}</td>
+      <td>${fmtN(c.avg_views)}</td>
+      <td class="${ok(vm) ? (vm >= 1 ? "good" : vm < 0.5 ? "bad" : "") : ""}">${ok(vm) ? vm.toFixed(2) + "×" : "—"}</td>
+      <td>${pct(c.reach_pct, 1)}</td>
+      <td>${pct(c.er_pct)}</td>
+      <td class="colsep">${fmt$(c.cpm)}</td>
+      <td>${fmt$(c.cpe)}</td>
+      <td>${fmt$(c.price_per_1k_followers)}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="14" class="empty">No influencers match.</td></tr>`;
+}
+
+const editing = () => document.activeElement?.tagName === "INPUT" && document.activeElement.closest("#rows");
+async function load() {
+  clearTimeout(timer);
+  try { D = await api("/api/creators"); if (!editing()) render(); } catch (e) {}
+  timer = setTimeout(load, D.pending.length || editing() ? 3000 : 30000);
+}
+
+$("head").addEventListener("click", (e) => {
+  const th = e.target.closest("th[data-sort]"); if (!th) return;
+  const k = th.dataset.sort;
+  sort = { key: k, dir: sort.key === k ? (sort.dir === "asc" ? "desc" : "asc") : LOW_FIRST.has(k) ? "asc" : "desc" };
+  try { localStorage.setItem("xca_csort", JSON.stringify(sort)); } catch (err) {}
+  render();
+});
+$("chips").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-p]"); if (!b) return;
+  sort = { key: b.dataset.p, dir: LOW_FIRST.has(b.dataset.p) ? "asc" : "desc" };
+  try { localStorage.setItem("xca_csort", JSON.stringify(sort)); } catch (err) {}
+  render();
+});
+["q", "wave", "plat"].forEach((id) => $(id).addEventListener("input", render));
+$("rows").addEventListener("change", async (e) => {
+  const el = e.target; if (!el.dataset.key || el.value === "") return;
+  try { await api("/api/creators/update", { key: el.dataset.key, [el.dataset.f]: Number(el.value) }); el.blur(); load(); } catch (err) { el.style.borderColor = "var(--bad)"; el.title = "Couldn't save: " + err.message; }
+});
+$("refresh").onclick = async () => { $("refresh").disabled = true; try { await api("/api/creators/refresh", {}); } finally { $("refresh").disabled = false; load(); } };
+api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
+load();
+</script>
+</body>
+</html>

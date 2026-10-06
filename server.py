@@ -19,7 +19,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlparse
@@ -27,7 +27,8 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 import auth
 import mcp_server
 import platforms
-from x_client import XClient, tweet_id_from
+from x_client import NeedsLogin, XClient, tweet_id_from
+import statistics
 
 try:
     from zoneinfo import ZoneInfo
@@ -97,6 +98,12 @@ def init_db():
             email TEXT PRIMARY KEY, signed_up TEXT NOT NULL,          -- UTC ISO
             keys INTEGER DEFAULT 0, requests_all REAL DEFAULT 0, requests_7d REAL DEFAULT 0,
             credit TEXT, unconfirmed INTEGER DEFAULT 0, ref TEXT, imported_at TEXT)""")
+        # Influencer profiles + their normal performance (baseline), keyed "x:<handle>" / "linkedin:<name>"
+        c.execute("""CREATE TABLE IF NOT EXISTS creators (
+            key TEXT PRIMARY KEY, platform TEXT, handle TEXT, name TEXT, user_id TEXT, avatar TEXT,
+            followers INTEGER, following INTEGER, posts_count INTEGER, verified INTEGER,
+            median_views INTEGER, median_likes INTEGER, median_eng INTEGER, median_er REAL, sample_size INTEGER,
+            baseline_source TEXT, baseline_note TEXT, profile_at TEXT, baseline_at TEXT, error TEXT)""")
         if not c.execute("SELECT 1 FROM campaigns").fetchone():
             c.execute("INSERT INTO campaigns(name, created_at) VALUES (?, ?)", ("My first campaign", now()))
 
@@ -109,7 +116,7 @@ _pending_lock = threading.Lock()
 
 
 def enqueue(post_id, key, platform="x", url=None):
-    if platform not in ("x", "linkedin"):
+    if platform not in ("x", "linkedin", "creator"):
         return                                  # nothing public to fetch; metrics are typed in
     with _pending_lock:
         if post_id in _pending:
@@ -128,6 +135,11 @@ def fetch_worker():
     while True:
         post_id, key, platform, url = _jobs.get()
         try:
+            if platform == "creator":           # post_id is the creator key, url the handle
+                if client is None:
+                    client = XClient()
+                fetch_creator(client, post_id, url)
+                continue
             if platform == "linkedin":
                 m = platforms.fetch_linkedin(url)
             else:
@@ -151,11 +163,141 @@ def fetch_worker():
             if "guest" in str(e).lower():
                 client = None
             with _db_lock, db() as c:
-                c.execute("UPDATE posts SET fetch_error=?, fetched_at=? WHERE id=?", (str(e)[:200], now(), post_id))
+                if platform == "creator":
+                    c.execute("INSERT INTO creators(key, platform, handle) VALUES (?, 'x', ?) ON CONFLICT(key) DO NOTHING", (post_id, url))
+                    c.execute("UPDATE creators SET error=?, profile_at=? WHERE key=?", (str(e)[:200], now(), post_id))
+                else:
+                    c.execute("UPDATE posts SET fetch_error=?, fetched_at=? WHERE id=?", (str(e)[:200], now(), post_id))
         finally:
             with _pending_lock:
                 _pending.discard(post_id)
             time.sleep(0.4)                     # be gentle with X's rate limits
+
+
+# ---------------------------------------------------------------- creators (influencers)
+
+CREATOR_TTL_H = 24          # refresh profiles / baselines once a day
+
+
+def creator_key(platform, author):
+    return f"{platform or 'x'}:{(author or '').strip().lower()}"
+
+
+def fetch_creator(client, key, handle):
+    """Profile (public) + baseline from their recent own posts (needs a logged-in X session).
+    Paid posts are excluded from the baseline, so 'vs median' compares our post with their normal."""
+    try:
+        prof, base, err = client.profile(handle), None, None
+    except ValueError:
+        # Handle no longer resolves — usually a rename. Ask X who wrote one of their posts now, and move the
+        # posts to the new handle; the next creators_view() picks the new handle up and fetches it.
+        with db() as c:
+            row = c.execute("SELECT tweet_id FROM posts WHERE lower(author)=lower(?) AND (platform='x' OR platform IS NULL) LIMIT 1",
+                            (handle,)).fetchone()
+        new = client.fetch(row[0])["author"] if row else None
+        if not new or new.lower() == handle.lower():
+            raise
+        with _db_lock, db() as c:
+            c.execute("UPDATE posts SET author=? WHERE lower(author)=lower(?) AND (platform='x' OR platform IS NULL)", (new, handle))
+            c.execute("DELETE FROM creators WHERE key=?", (key,))
+        print(f"creator renamed: @{handle} -> @{new}", flush=True)
+        enqueue(creator_key("x", new), creator_key("x", new), "creator", new)
+        return
+    try:
+        with db() as c:
+            paid = {r[0] for r in c.execute("SELECT tweet_id FROM posts WHERE platform='x' OR platform IS NULL")}
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()   # "their normal" = the last 3 months
+        recent = [t for t in client.recent_posts(prof["user_id"], prof["handle"])
+                  if t["tweet_id"] not in paid and t["views"] and t["created_at"] >= cutoff][:30]
+        if len(recent) >= 3:
+            eng = [t["likes"] + t["retweets"] + t["quotes"] + t["replies"] + t["bookmarks"] for t in recent]
+            base = {"median_views": int(statistics.median(t["views"] for t in recent)),
+                    "median_likes": int(statistics.median(t["likes"] for t in recent)),
+                    "median_eng": int(statistics.median(eng)),
+                    "median_er": round(statistics.median(e / t["views"] * 100 for e, t in zip(eng, recent)), 3),
+                    "sample_size": len(recent),
+                    "baseline_note": f"last {len(recent)} own posts {recent[-1]['created_at'][:10]} → {recent[0]['created_at'][:10]}"}
+        else:
+            err = f"only {len(recent)} own posts with views in the last 90 days"
+    except NeedsLogin:
+        err = "median views need a logged-in X session (X_AUTH_TOKEN / X_CT0)"
+    with _db_lock, db() as c:
+        c.execute("""INSERT INTO creators(key, platform, handle) VALUES (?, 'x', ?) ON CONFLICT(key) DO NOTHING""", (key, prof["handle"]))
+        c.execute("""UPDATE creators SET handle=?, name=?, user_id=?, avatar=?, followers=?, following=?, posts_count=?,
+                     verified=?, profile_at=?, error=? WHERE key=?""",
+                  (prof["handle"], prof["name"], prof["user_id"], prof["avatar"], prof["followers"], prof["following"],
+                   prof["posts_count"], int(prof["verified"]), now(), err, key))
+        if base:   # don't overwrite numbers someone entered by hand / via Claude with nothing
+            c.execute(f"""UPDATE creators SET {", ".join(f"{k}=?" for k in base)}, baseline_source='x', baseline_at=?
+                          WHERE key=?""", (*base.values(), now(), key))
+
+
+def creators_view(enqueue_stale=True):
+    """One row per creator across all waves: profile + baseline + how their paid posts did."""
+    dv = lambda a, b: a / b if b else None  # noqa: E731
+    r2 = lambda x, n=2: round(x, n) if x is not None else None  # noqa: E731
+    with db() as c:
+        names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM campaigns")}
+        prof = {r["key"]: dict(r) for r in c.execute("SELECT * FROM creators")}
+        posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE author IS NOT NULL AND author != ''")]
+    rows, stale = {}, []
+    for p in posts:
+        k = creator_key(p["platform"], p["author"])
+        r = rows.setdefault(k, {"key": k, "platform": p["platform"] or "x", "author": p["author"], "waves": [], "posts": 0,
+                                "paid": 0.0, "views": 0, "eng": 0, "eng_v": 0, "spend_v": 0.0, "post_urls": []})
+        if names.get(p["campaign_id"]) not in r["waves"]:
+            r["waves"].append(names.get(p["campaign_id"]))
+        e = sum(p[m] for m in METRICS[1:])
+        r["posts"] += 1
+        r["paid"] += p["budget"] or 0
+        r["views"] += p["views"]
+        r["eng"] += e
+        if p["views"]:
+            r["eng_v"] += e
+            r["spend_v"] += p["budget"] or 0
+        r["post_urls"].append(p["url"])
+    out = []
+    for k, r in rows.items():
+        pr = prof.get(k, {})
+        avg_views = dv(r["views"], r["posts"]) if r["views"] else None   # avg views per paid post
+        f = pr.get("followers")
+        out.append({
+            "key": k, "platform": r["platform"], "handle": pr.get("handle") or r["author"], "name": pr.get("name") or r["author"],
+            "avatar": pr.get("avatar"), "verified": bool(pr.get("verified")), "followers": f,
+            "median_views": pr.get("median_views"), "median_er": pr.get("median_er"), "median_likes": pr.get("median_likes"),
+            "sample_size": pr.get("sample_size"), "baseline_source": pr.get("baseline_source"), "baseline_note": pr.get("baseline_note"),
+            "profile_error": pr.get("error"), "profile_at": pr.get("profile_at"),
+            "waves": r["waves"], "posts": r["posts"], "paid": r["paid"], "views": r["views"], "engagements": r["eng"],
+            "avg_views": r2(avg_views, 0), "er_pct": r2(dv(r["eng_v"] * 100, r["views"])),
+            "cpm": r2(dv(r["spend_v"] * 1000, r["views"])), "cpe": r2(dv(r["paid"], r["eng"]) if r["paid"] else None),
+            "price_per_1k_followers": r2(dv(dv(r["paid"], r["posts"]) * 1000, f) if r["paid"] and f else None),
+            "reach_pct": r2(dv(avg_views * 100, f) if avg_views and f else None),
+            "vs_median": r2(dv(avg_views, pr.get("median_views")) if avg_views else None),
+            "post_urls": r["post_urls"],
+        })
+        fresh = pr.get("profile_at") and (datetime.now(timezone.utc) - datetime.fromisoformat(pr["profile_at"])).total_seconds() < CREATOR_TTL_H * 3600
+        if r["platform"] == "x" and not fresh:
+            stale.append((k, r["author"]))
+    if enqueue_stale:
+        for k, h in stale:
+            enqueue(k, k, "creator", h)
+    with _pending_lock:
+        pend = [r["key"] for r in out if r["key"] in _pending]
+    return {"creators": out, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0"))}
+
+
+def set_creator_stats(key, fields, source="manual"):
+    allowed = {"followers", "median_views", "median_likes", "median_eng", "median_er", "sample_size", "baseline_note", "name"}
+    fields = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not fields:
+        raise ValueError("nothing to set")
+    platform, _, handle = key.partition(":")
+    with _db_lock, db() as c:
+        c.execute("INSERT INTO creators(key, platform, handle) VALUES (?,?,?) ON CONFLICT(key) DO NOTHING", (key, platform, handle))
+        extra = ", baseline_source=?, baseline_at=?" if set(fields) & {"median_views", "median_er", "median_likes", "median_eng"} else ""
+        c.execute(f"UPDATE creators SET {', '.join(f'{k}=?' for k in fields)}{extra} WHERE key=?",
+                  (*fields.values(), *((source, now()) if extra else ()), key))
+    return {"key": key, **fields}
 
 
 # ---------------------------------------------------------------- backups
@@ -601,6 +743,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/totals":
             with open(os.path.join(HERE, "static", "totals.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/influencers":
+            with open(os.path.join(HERE, "static", "influencers.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/api/creators":
+            return self._send(200, creators_view())
         if u.path == "/api/report":
             return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
@@ -656,6 +803,18 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return
         path = u.path
+        if path == "/api/creators/update":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, set_creator_stats(b.pop("key"), b, "manual"))
+            except (ValueError, KeyError) as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/creators/refresh":
+            v = creators_view(enqueue_stale=False)
+            for r in v["creators"]:
+                if r["platform"] == "x":
+                    enqueue(r["key"], r["key"], "creator", r["handle"])
+            return self._send(200, {"queued": sum(r["platform"] == "x" for r in v["creators"])})
         if path == "/api/users/import":
             tz = parse_qs(u.query).get("tz", ["America/Los_Angeles"])[0]
             try:

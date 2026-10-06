@@ -35,7 +35,10 @@ INSTRUCTIONS = """Campaign Analyzer: paid creator campaigns (X, LinkedIn, other 
   time: each user belongs to the latest wave whose first post was before their signup (earlier users -> first
   wave). Daily registrations / API users are recalculated from it. Ask for the export's timezone if unclear.
 - API users = users who made at least one API request.
-- get_report gives the dashboard numbers and top performers per wave; use it to answer analysis questions."""
+- get_report gives the dashboard numbers and top performers per wave; use it to answer analysis questions.
+- get_creators lists every influencer with followers, their normal median views / ER (from their recent posts)
+  and how our paid posts did vs that baseline. If median views are missing (X needs a login for timelines) and
+  you can look them up (e.g. with a scraping tool), save them with set_creator_stats."""
 
 
 # ---------------------------------------------------------------- tool definitions
@@ -90,6 +93,21 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "campaign": _campaign_arg("Optional: one campaign; omit for all"),
          "top": {"type": "integer", "description": "How many top/bottom creators to list (default 5)"}}}},
+    {"name": "get_creators",
+     "description": "Every influencer across waves: followers, their normal median views and ER (recent own posts, paid "
+                    "posts excluded), and how our paid posts did: avg views, vs_median (×), reach %, ER, CPM, CPE, "
+                    "$ per 1K followers. Optional filter by wave.",
+     "inputSchema": {"type": "object", "properties": {"campaign": _campaign_arg("Optional: only creators in this wave")}}},
+    {"name": "set_creator_stats",
+     "description": "Save an influencer's profile/baseline numbers that couldn't be fetched (LinkedIn followers, or median "
+                    "views/ER when X needs a login). Identify the creator by X handle or, for LinkedIn, their name.",
+     "inputSchema": {"type": "object", "required": ["creator"], "properties": {
+         "creator": {"type": "string", "description": "X handle (e.g. dravenip) or LinkedIn name (e.g. Eduardo Ordax)"},
+         "platform": {"type": "string", "enum": ["x", "linkedin", "other"], "description": "default x"},
+         "followers": {"type": "integer"}, "median_views": {"type": "integer"}, "median_likes": {"type": "integer"},
+         "median_er": {"type": "number", "description": "percent, e.g. 1.8"},
+         "sample_size": {"type": "integer", "description": "how many recent posts the medians are based on"},
+         "note": {"type": "string", "description": "where the numbers came from, e.g. 'last 20 posts via scraper'"}}}},
     {"name": "get_posts", "description": "Every post in a campaign with cost, note and metrics.",
      "inputSchema": {"type": "object", "required": ["campaign"], "properties": {"campaign": _campaign_arg()}}},
 ]
@@ -130,6 +148,21 @@ def call_tool(app, user, name, args):
     if name == "list_campaigns":
         return [{k: v for k, v in r.items() if k != "top" and k != "bottom" and k != "flags"}
                 for r in app.report(None, top=0)["campaigns"]]
+    if name == "get_creators":
+        v = app.creators_view()
+        if args.get("campaign") is not None:
+            with app.db() as c:
+                cname = c.execute("SELECT name FROM campaigns WHERE id=?", (_campaign_id(app, c, args["campaign"]),)).fetchone()["name"]
+            v["creators"] = [r for r in v["creators"] if cname in r["waves"]]
+        for r in v["creators"]:
+            r.pop("avatar", None)
+        return {"creators": v["creators"], "x_login_configured": v["x_login"],
+                "note": "vs_median = avg views of our paid post / their median views. Missing medians can be filled with set_creator_stats."}
+    if name == "set_creator_stats":
+        key = app.creator_key(args.get("platform") or "x", str(args["creator"]).lstrip("@"))
+        fields = {k: args.get(k) for k in ("followers", "median_views", "median_likes", "median_er", "sample_size")}
+        fields["baseline_note"] = args.get("note")
+        return app.set_creator_stats(key, fields, source="claude")
     if name == "import_users":
         return app.import_users(args["csv_text"], args.get("timezone") or "America/Los_Angeles")
 
