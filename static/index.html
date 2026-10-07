@@ -70,6 +70,10 @@ th.sorted { color: var(--accent); }
 th.sorted::after { content: " ↓"; }
 th.sorted.asc::after { content: " ↑"; }
 td.rank { color: var(--muted); font-size: 12px; width: 1%; }
+td.rank label, th label.selall { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+tr.picked td { background: var(--surface-2); }
+#packBtn { margin-left: auto; }
+#packBtn.armed { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .sortbar { margin-bottom: 10px; }
 .sortbar button { padding: 4px 10px; border-radius: 999px; font-size: 12.5px; }
 .sortbar button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
@@ -147,11 +151,12 @@ td input.note { width: 170px; text-align: left; }
       <button data-preset="budget">Most expensive</button>
       <button data-preset="day">By date</button>
       <span class="hint" style="margin:0">or click any column header</span>
+      <button id="packBtn" title="One price for a bundle of posts: split evenly across the ticked posts (or all posts in this wave)">$ Set pack price</button>
     </div>
     <div class="table-wrap">
       <table>
         <thead id="postsHead"><tr>
-          <th class="l">#</th><th class="l" data-sort="author">Post</th><th class="l" data-sort="note">Note</th><th class="l" data-sort="day">Day</th>
+          <th class="l"><label class="selall" title="Select all"><input type="checkbox" id="selAll">#</label></th><th class="l" data-sort="author">Post</th><th class="l" data-sort="note">Note</th><th class="l" data-sort="day">Day</th>
           <th data-sort="budget">Cost $</th><th data-sort="views">Views</th><th data-sort="likes">Likes</th><th data-sort="retweets">Reposts</th>
           <th data-sort="quotes">Quotes</th><th data-sort="replies">Replies</th><th data-sort="bookmarks">Bookm.</th><th data-sort="eng">Engag.</th>
           <th data-sort="er">ER</th><th data-sort="cpm">CPM</th><th data-sort="cpe">CPE</th><th></th>
@@ -244,7 +249,17 @@ async function api(path, body) {
 }
 
 // Re-render replaces the tables, so never do it while someone is typing in one of them.
-const editing = () => document.activeElement?.closest?.("table") && document.activeElement.tagName === "INPUT";
+const editing = () => document.activeElement?.closest?.("table") && document.activeElement.tagName === "INPUT" && document.activeElement.type !== "checkbox";
+// Posts ticked for a pack price (kept across re-renders, cleared when switching waves)
+const picked = new Set();
+function packLabel() {
+  const ids = new Set(S.posts.map((p) => p.id));
+  [...picked].forEach((id) => ids.has(id) || picked.delete(id));
+  $("packBtn").textContent = picked.size ? `$ Set pack price for ${picked.size} selected` : "$ Set pack price";
+  $("packBtn").classList.toggle("armed", picked.size > 0);
+  $("selAll").checked = picked.size > 0 && picked.size === S.posts.length;
+  $("selAll").indeterminate = picked.size > 0 && picked.size < S.posts.length;
+}
 let pollTimer = null;
 async function load() {
   clearTimeout(pollTimer);
@@ -350,8 +365,8 @@ function render() {
     b.dataset.preset === postSort.key && PRESET_DIR[b.dataset.preset] === postSort.dir));
   $("postsBody").innerHTML = P.length ? sortedPosts(P).map((p, i) => {
     const e = eng(p);
-    return `<tr>
-      <td class="rank l">${i + 1}</td>
+    return `<tr class="${picked.has(p.id) ? "picked" : ""}">
+      <td class="rank l"><label><input type="checkbox" data-sel="${p.id}" ${picked.has(p.id) ? "checked" : ""}>${i + 1}</label></td>
       <td class="post-cell l"><span class="badge">${PLAT[p.platform || "x"]}</span><a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || "…")}</a>
         <div class="t" title="${esc(p.text)}">${esc((p.text || "").slice(0, 70))}</div>
         ${S.pending.includes(p.id) ? `<div class="fetching">⟳ fetching metrics…</div>` : p.fetch_error ? `<div class="err">⚠ ${esc(p.fetch_error)}</div>` : ""}</td>
@@ -366,6 +381,8 @@ function render() {
   $("postsFoot").innerHTML = P.length ? `<tr><td></td><td class="l">Total</td><td></td><td></td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td>
     ${ENG.map((m) => `<td>${fmtInt(P.reduce((s, p) => s + (p[m] || 0), 0))}</td>`).join("")}<td>${fmtInt(T.eng)}</td>
     <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spendV * 1000, T.views))}</td><td>${fmt$(div(T.spendE, T.eng), 3)}</td><td></td></tr>` : "";
+
+  packLabel();
 
   // Days table — computed from the imported users when there are any, otherwise typed in by hand
   const fromUsers = S.days_source === "users";
@@ -490,7 +507,15 @@ document.addEventListener("change", async (ev) => {
   } else if (el.id === "otherSpend" || el.id === "otherNote") {
     await api("/api/campaigns/other_spend", { id: cid, other_spend: Number($("otherSpend").value) || 0, other_note: $("otherNote").value.trim() || null });
     await load();
-  } else if (el.id === "campaign") { cid = Number(el.value); load(); }
+  } else if (el.dataset.sel) {
+    el.checked ? picked.add(Number(el.dataset.sel)) : picked.delete(Number(el.dataset.sel));
+    el.closest("tr").classList.toggle("picked", el.checked);
+    packLabel();
+  } else if (el.id === "selAll") {
+    picked.clear();
+    if (el.checked) S.posts.forEach((p) => picked.add(p.id));
+    render();
+  } else if (el.id === "campaign") { cid = Number(el.value); picked.clear(); load(); }
 });
 
 document.addEventListener("click", async (ev) => {
@@ -517,6 +542,24 @@ $("sortbar").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-preset]");
   if (b) setSort(b.dataset.preset, { views: "desc", eng: "desc", er: "desc", cpm: "asc", cpe: "asc", budget: "desc", day: "asc" }[b.dataset.preset]);
 });
+$("packBtn").onclick = async () => {
+  const posts = picked.size ? S.posts.filter((p) => picked.has(p.id)) : S.posts;
+  if (!posts.length) return toast("No posts in this wave yet");
+  const scope = picked.size ? `${posts.length} selected post${posts.length === 1 ? "" : "s"}` : `all ${posts.length} posts in this wave`;
+  const now = posts.reduce((s, p) => s + (p.budget || 0), 0);
+  const raw = await askText(`Pack price for ${scope} — total in $\n(currently ${fmt$(now)} combined)`, "", "Next");
+  if (raw == null) return;
+  const total = Number(String(raw).replace(/[$,\s]/g, ""));
+  if (!isFinite(total) || total < 0) return toast("Enter a number, e.g. 2500");
+  const note = await askText("Name for the pack (shown in each post's note) — optional", "", "Apply");
+  if (!(await askConfirm(`Split ${fmt$(total)} across ${scope}\n= ${fmt$(total / posts.length)} each.\n\nThis replaces their current costs (${fmt$(now)} combined).`, "Apply pack price"))) return;
+  try {
+    const r = await api("/api/posts/pack", { campaign_id: cid, ids: picked.size ? [...picked] : null, total, note: note || null });
+    toast(`Pack price set: ${fmt$(r.each)} × ${r.posts} posts`);
+    picked.clear();
+    load();
+  } catch (e) { toast("Couldn't set pack price: " + e.message.slice(0, 100)); }
+};
 $("usersBtn").onclick = () => $("usersFile").click();
 $("usersFile").onchange = async () => {
   const f = $("usersFile").files[0]; $("usersFile").value = "";

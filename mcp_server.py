@@ -64,6 +64,14 @@ TOOLS = [
              "url": {"type": "string", "description": "Post link, e.g. x.com/<handle>/status/<id> or a LinkedIn post / lnkd.in link"},
              "cost": {"type": "number", "description": "USD paid for this post (split shared payments evenly)"},
              "note": {"type": "string", "description": "format + payment status, e.g. 'QRT · paid with paypal'"}}}}}}},
+    {"name": "set_pack_price",
+     "description": "One price for a bundle of posts (e.g. we bought a pack of influencers from an agency): splits the "
+                    "total evenly across the given posts (or every post in the wave if none are given) and notes the pack "
+                    "on each. Use this instead of add_posts costs when the user only knows the pack total.",
+     "inputSchema": {"type": "object", "required": ["campaign", "total"], "properties": {
+         "campaign": _campaign_arg(), "total": {"type": "number", "description": "USD for the whole pack"},
+         "urls": {"type": "array", "items": {"type": "string"}, "description": "Post links in the pack; omit = all posts in the wave"},
+         "note": {"type": "string", "description": "e.g. 'Agency X pack'"}}}},
     {"name": "update_post",
      "description": "Change a post's cost, note, attribution day (YYYY-MM-DD), or — for non-X posts — metrics that "
                     "can't be fetched (LinkedIn impressions go in views; reposts in retweets; comments in replies).",
@@ -197,6 +205,10 @@ def call_tool(app, user, name, args):
             result = {"added": len(added), "updated_existing": len(updated), "invalid_links": invalid,
                       "total_cost_in_request": sum(float(p.get("cost") or 0) for p in args["posts"]),
                       "note": "Metrics are being fetched in the background (~1s per post)."}
+        elif name == "set_pack_price":
+            cid = _campaign_id(app, c, args["campaign"])
+            ids = [_post(app, c, cid, u)["id"] for u in args.get("urls") or []] or None
+            result = app.apply_pack(c, cid, ids, float(args["total"]), args.get("note"))
         elif name == "update_post":
             cid = _campaign_id(app, c, args["campaign"])
             row = _post(app, c, cid, args["url"])

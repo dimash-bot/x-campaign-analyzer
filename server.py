@@ -174,6 +174,29 @@ def fetch_worker():
             time.sleep(0.4)                     # be gentle with X's rate limits
 
 
+# ---------------------------------------------------------------- pack deals
+
+def apply_pack(c, campaign_id, ids, total, note=None):
+    """One price for a bundle of posts (e.g. an agency pack): split `total` evenly across the posts, putting the
+    rounding cents on the last one so they add up exactly. ids=None means every post in the wave."""
+    rows = c.execute("SELECT id, note FROM posts WHERE campaign_id=? ORDER BY id", (campaign_id,)).fetchall()
+    if ids:
+        ids = {int(i) for i in ids}
+        rows = [r for r in rows if r["id"] in ids]
+    if not rows:
+        raise ValueError("no posts to apply the pack price to")
+    if total < 0:
+        raise ValueError("pack price can't be negative")
+    each = round(total / len(rows), 2)
+    tag = note or f"pack ${total:,.0f} ÷ {len(rows)}"
+    for i, r in enumerate(rows):
+        price = round(total - each * (len(rows) - 1), 2) if i == len(rows) - 1 else each
+        old = r["note"] or ""
+        new_note = old if tag in old else (f"{old} · {tag}" if old else tag)
+        c.execute("UPDATE posts SET budget=?, note=? WHERE id=?", (price, new_note, r["id"]))
+    return {"posts": len(rows), "each": each, "total": total, "note": tag}
+
+
 # ---------------------------------------------------------------- creators (influencers)
 
 CREATOR_TTL_H = 24          # refresh profiles / baselines once a day
@@ -880,6 +903,12 @@ class Handler(BaseHTTPRequestHandler):
                 if fields:
                     c.execute(f"UPDATE posts SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?",
                               (*fields.values(), b["id"]))
+
+            elif path == "/api/posts/pack":
+                try:
+                    result = apply_pack(c, b["campaign_id"], b.get("ids"), float(b["total"]), b.get("note"))
+                except (ValueError, KeyError, TypeError) as e:
+                    return self._send(400, {"error": str(e)})
 
             elif path == "/api/posts/delete":
                 c.execute("DELETE FROM posts WHERE id=?", (b["id"],))
