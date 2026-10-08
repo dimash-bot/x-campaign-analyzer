@@ -78,6 +78,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["campaign", "url"], "properties": {
          "campaign": _campaign_arg(), "url": {"type": "string"}, "cost": {"type": "number"},
          "note": {"type": "string"}, "day": {"type": "string"},
+         "exclude_from_budget": {"type": "boolean", "description": "true = keep the post but leave its cost out of the total budget"},
          **{k: {"type": "integer"} for k in ("views", "likes", "retweets", "quotes", "replies", "bookmarks")}}}},
     {"name": "remove_post", "description": "Remove a post from a campaign.",
      "inputSchema": {"type": "object", "required": ["campaign", "url"],
@@ -212,7 +213,8 @@ def call_tool(app, user, name, args):
         elif name == "update_post":
             cid = _campaign_id(app, c, args["campaign"])
             row = _post(app, c, cid, args["url"])
-            fields = {"budget": args.get("cost"), "note": args.get("note"), "day": args.get("day")}
+            fields = {"budget": args.get("cost"), "note": args.get("note"), "day": args.get("day"),
+                      "excluded": None if args.get("exclude_from_budget") is None else int(bool(args["exclude_from_budget"]))}
             auto = app.platforms.AUTO_METRICS[row["platform"] or "x"]
             for k in app.METRICS:
                 if args.get(k) is not None:
@@ -240,7 +242,7 @@ def call_tool(app, user, name, args):
             result = {"queued": len(to_fetch)}
         elif name == "get_posts":
             cid = _campaign_id(app, c, args["campaign"])
-            result = [{k: r[k] for k in ("platform", "url", "author", "day", "budget", "note", *app.METRICS, "fetch_error")}
+            result = [{k: r[k] for k in ("platform", "url", "author", "day", "budget", "excluded", "note", *app.METRICS, "fetch_error")}
                       for r in c.execute("SELECT * FROM posts WHERE campaign_id=? ORDER BY day, id", (cid,))]
         else:
             raise ToolError(f"Unknown tool {name}")

@@ -72,6 +72,12 @@ th.sorted.asc::after { content: " ↑"; }
 td.rank { color: var(--muted); font-size: 12px; width: 1%; }
 td.rank label, th label.selall { display: flex; gap: 6px; align-items: center; cursor: pointer; }
 tr.picked td { background: var(--surface-2); }
+tr.excluded td { opacity: .5; }
+tr.excluded td:last-child { opacity: 1; }
+tr.excluded td input[data-f="budget"] { text-decoration: line-through; }
+.excl-tag { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 0 6px; border-radius: 5px; margin-left: 4px;
+  color: var(--bad); border: 1px solid currentColor; vertical-align: 1px; }
+button.ghost.on { color: var(--bad); }
 #packBtn { margin-left: auto; }
 #packBtn.armed { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .sortbar { margin-bottom: 10px; }
@@ -199,7 +205,7 @@ td input.note { width: 170px; text-align: left; }
       <div class="formula">
         <div><b>Engagements</b> = likes + retweets + quotes + replies + bookmarks</div>
         <div><b>ER</b> = engagements ÷ views</div>
-        <div><b>Total budget</b> = sum of X post costs + other spend</div>
+        <div><b>Total budget</b> = sum of post costs + other spend. Posts marked ⊘ excluded don't count toward any total.</div>
         <div><b>Avg CPM</b> = X post costs ÷ views × 1,000</div>
         <div><b>Avg CPE</b> = X post costs ÷ engagements</div>
         <div><b>$ / reg</b> = spend ÷ registrations (per day: that day's post costs; total: total budget)</div>
@@ -237,6 +243,7 @@ const fmt$ = (n, d = 2) => n == null || !isFinite(n) ? "—" : "$" + n.toLocaleS
 const fmtPct = (n, d = 2) => n == null || !isFinite(n) ? "—" : (n * 100).toFixed(d) + "%";
 const div = (a, b) => (b ? a / b : null);
 const eng = (p) => ENG.reduce((s, k) => s + (p[k] || 0), 0);
+const cost = (p) => p.budget || 0;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
@@ -286,7 +293,7 @@ function metricCell(p, m) {
 const SORT_KEYS = {
   author: (p) => (p.author || "").toLowerCase(), note: (p) => (p.note || "").toLowerCase(), day: (p) => p.day || "",
   budget: (p) => p.budget || 0, eng: (p) => eng(p),
-  er: (p) => div(eng(p), p.views), cpm: (p) => (p.budget ? div(p.budget * 1000, p.views) : null), cpe: (p) => (p.budget ? div(p.budget, eng(p)) : null),
+  er: (p) => div(eng(p), p.views), cpm: (p) => (cost(p) ? div(cost(p) * 1000, p.views) : null), cpe: (p) => (cost(p) ? div(cost(p), eng(p)) : null),
   ...Object.fromEntries(["views", ...ENG].map((m) => [m, (p) => p[m] || 0])),
 };
 const LOW_FIRST = new Set(["author", "note", "day", "cpm", "cpe"]);   // first click sorts these ascending
@@ -309,9 +316,9 @@ function sortedPosts(P) {
 function aggregateDays() {
   const m = {};
   const row = (d) => (m[d] ||= { day: d, posts: 0, spend: 0, spendV: 0, views: 0, eng: 0, engV: 0, reg: 0, api: 0, hasEntry: false });
-  for (const p of S.posts) {
-    const r = row(p.day || "—"); r.posts++; r.spend += p.budget || 0; r.views += p.views || 0; r.eng += eng(p);
-    if (p.views) { r.engV += eng(p); r.spendV += p.budget || 0; }
+  for (const p of S.posts.filter((p) => !p.excluded)) {
+    const r = row(p.day || "—"); r.posts++; r.spend += cost(p); r.views += p.views || 0; r.eng += eng(p);
+    if (p.views) { r.engV += eng(p); r.spendV += cost(p); }
   }
   for (const d of S.days) { const r = row(d.day); r.reg = d.registrations; r.api = d.api_users; r.hasEntry = true; }
   return Object.values(m).sort((a, b) => a.day.localeCompare(b.day));
@@ -321,16 +328,18 @@ function render() {
   $("campaign").innerHTML = S.campaigns.map((c) => `<option value="${c.id}" ${c.id === cid ? "selected" : ""}>${esc(c.name)}</option>`).join("");
   $("exportCsv").href = "/api/export.csv?campaign=" + cid;
 
-  const P = S.posts;
+  // Excluded posts stay in the table (greyed, tagged) but count toward no total: P = posts that count
+  const P = S.posts.filter((p) => !p.excluded);
   // CPM/ER/CPE only use posts that have the number (a LinkedIn post without impressions yet doesn't skew them)
   const T = { spend: 0, views: 0, eng: 0, engV: 0, spendV: 0, spendE: 0 };
   for (const p of P) {
-    T.spend += p.budget || 0; T.views += p.views || 0; T.eng += eng(p);
-    if (p.views) { T.engV += eng(p); T.spendV += p.budget || 0; }
-    if (eng(p)) T.spendE += p.budget || 0;
+    T.spend += cost(p); T.views += p.views || 0; T.eng += eng(p);
+    if (p.views) { T.engV += eng(p); T.spendV += cost(p); }
+    if (eng(p)) T.spendE += cost(p);
   }
   const plats = [...new Set(P.map((p) => p.platform || "x"))];
-  const missingViews = P.filter((p) => !p.views && p.budget && (p.platform || "x") !== "x").length;
+  const missingViews = P.filter((p) => !p.views && cost(p) && (p.platform || "x") !== "x").length;
+  const EX = S.posts.filter((p) => p.excluded), excludedN = EX.length, excluded$ = EX.reduce((s, p) => s + (p.budget || 0), 0);
   const days = aggregateDays();
   const reg = days.reduce((s, d) => s + d.reg, 0), apiU = days.reduce((s, d) => s + d.api, 0);
 
@@ -340,9 +349,9 @@ function render() {
   if (document.activeElement !== $("otherNote")) $("otherNote").value = camp.other_note || "";
   const k = (l, v, s = "", cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   $("kpis").innerHTML = [
-    k("Total budget", fmt$(total, 0), [...plats.map((pl) => `${fmt$(P.filter((p) => (p.platform || "x") === pl).reduce((s, p) => s + (p.budget || 0), 0), 0)} ${PLAT[pl]}`),
-      ...(other ? [`${fmt$(other, 0)} other`] : [])].join(" · ")),
-    k("Avg cost / post", fmt$(div(T.spend, P.length), 0), `${P.length} post${P.length === 1 ? "" : "s"}`),
+    k("Total budget", fmt$(total, 0), [...plats.map((pl) => `${fmt$(P.filter((p) => (p.platform || "x") === pl).reduce((s, p) => s + cost(p), 0), 0)} ${PLAT[pl]}`),
+      ...(other ? [`${fmt$(other, 0)} other`] : []), ...(excludedN ? [`not counting ${excludedN} excluded (${fmt$(excluded$, 0)})`] : [])].join(" · ")),
+    k("Avg cost / post", fmt$(div(T.spend, P.length), 0), `${P.length} post${P.length === 1 ? "" : "s"}` + (excludedN ? ` · ${excludedN} excluded` : "")),
     k("Views", fmtN(T.views), fmtN(div(T.views, P.length)) + " avg / post"),
     k("Engagements", fmtN(T.eng)),
     k("ER", fmtPct(div(T.engV, T.views)), "engagements ÷ views"),
@@ -364,22 +373,22 @@ function render() {
   const PRESET_DIR = { views: "desc", eng: "desc", er: "desc", cpm: "asc", cpe: "asc", budget: "desc", day: "asc" };
   document.querySelectorAll("#sortbar button").forEach((b) => b.classList.toggle("on",
     b.dataset.preset === postSort.key && PRESET_DIR[b.dataset.preset] === postSort.dir));
-  $("postsBody").innerHTML = P.length ? sortedPosts(P).map((p, i) => {
+  $("postsBody").innerHTML = S.posts.length ? sortedPosts(S.posts).map((p, i) => {
     const e = eng(p);
-    return `<tr class="${picked.has(p.id) ? "picked" : ""}">
+    return `<tr class="${picked.has(p.id) ? "picked" : ""}${p.excluded ? " excluded" : ""}">
       <td class="rank l"><label><input type="checkbox" data-sel="${p.id}" ${picked.has(p.id) ? "checked" : ""}>${i + 1}</label></td>
-      <td class="post-cell l"><span class="badge">${PLAT[p.platform || "x"]}</span><a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || "…")}</a>
+      <td class="post-cell l"><span class="badge">${PLAT[p.platform || "x"]}</span><a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || "…")}</a>${p.excluded ? `<span class="excl-tag" title="Not counted in any total">excluded</span>` : ""}
         <div class="t" title="${esc(p.text)}">${esc((p.text || "").slice(0, 70))}</div>
         ${S.pending.includes(p.id) ? `<div class="fetching">⟳ fetching metrics…</div>` : p.fetch_error ? `<div class="err">⚠ ${esc(p.fetch_error)}</div>` : ""}</td>
       <td class="l"><input class="note" value="${esc(p.note || "")}" data-post="${p.id}" data-f="note" placeholder="payment note"></td>
       <td class="l"><input type="date" value="${esc(p.day || "")}" data-post="${p.id}" data-f="day"></td>
       <td><input type="number" min="0" step="0.01" value="${p.budget || 0}" data-post="${p.id}" data-f="budget"></td>
       ${["views", ...ENG].map((m) => metricCell(p, m)).join("")}<td>${fmtInt(e)}</td>
-      <td>${fmtPct(div(e, p.views))}</td><td>${fmt$(div((p.budget || 0) * 1000, p.views))}</td><td>${fmt$(div(p.budget || 0, e), 3)}</td>
-      <td><button class="ghost" title="Refresh" data-refresh="${p.id}">↻</button><button class="ghost" title="Remove" data-del-post="${p.id}">✕</button></td>
+      <td>${fmtPct(div(e, p.views))}</td><td>${cost(p) ? fmt$(div(cost(p) * 1000, p.views)) : "—"}</td><td>${cost(p) ? fmt$(div(cost(p), e), 3) : "—"}</td>
+      <td><button class="ghost${p.excluded ? " on" : ""}" title="${p.excluded ? "Excluded from all totals — click to count it again" : "Exclude this post from all totals (cost, views, engagement)"}" data-excl="${p.id}">⊘</button><button class="ghost" title="Refresh" data-refresh="${p.id}">↻</button><button class="ghost" title="Remove" data-del-post="${p.id}">✕</button></td>
     </tr>`;
   }).join("") : `<tr><td colspan="16" class="l muted">No posts yet — paste links above.</td></tr>`;
-  $("postsFoot").innerHTML = P.length ? `<tr><td></td><td class="l">Total</td><td></td><td></td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td>
+  $("postsFoot").innerHTML = S.posts.length ? `<tr><td></td><td class="l">Total${excludedN ? ` <span class="muted" style="font-weight:400">(${excludedN} excluded not counted)</span>` : ""}</td><td></td><td></td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td>
     ${ENG.map((m) => `<td>${fmtInt(P.reduce((s, p) => s + (p[m] || 0), 0))}</td>`).join("")}<td>${fmtInt(T.eng)}</td>
     <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spendV * 1000, T.views))}</td><td>${fmt$(div(T.spendE, T.eng), 3)}</td><td></td></tr>` : "";
 
@@ -522,6 +531,12 @@ document.addEventListener("change", async (ev) => {
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest("button"); if (!b) return;
   if (b.dataset.delPost && await askConfirm("Remove this post from the campaign?", "Remove")) { await api("/api/posts/delete", { id: Number(b.dataset.delPost) }); load(); }
+  if (b.dataset.excl) {
+    const p = S.posts.find((x) => x.id === Number(b.dataset.excl));
+    await api("/api/posts/update", { id: p.id, excluded: !p.excluded });
+    toast(p.excluded ? `@${p.author} counts toward totals again` : `@${p.author} excluded from all totals`);
+    return load();
+  }
   if (b.dataset.refresh) busy(b, "…", async () => { await api("/api/refresh", { campaign_id: cid, ids: [Number(b.dataset.refresh)] }); await load(); });
   if (b.dataset.delDay) { await api("/api/days/delete", { campaign_id: cid, day: b.dataset.delDay }); load(); }
 });

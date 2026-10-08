@@ -46,6 +46,13 @@ KEEP_BACKUPS = 14
 
 METRICS = ["views", "likes", "retweets", "quotes", "replies", "bookmarks"]
 
+
+INCLUDED = "(excluded IS NULL OR excluded = 0)"   # SQL filter: posts that count toward totals
+
+
+def cost(p):
+    return p.get("budget") or 0
+
 _db_lock = threading.Lock()     # serializes writes; SQLite allows one writer at a time
 
 
@@ -91,6 +98,7 @@ def init_db():
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         add_col("posts", "note", "TEXT")
         add_col("posts", "platform", "TEXT DEFAULT 'x'")       # x | linkedin | other
+        add_col("posts", "excluded", "INTEGER DEFAULT 0")      # 1 = keep the post, leave its cost out of budgets
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
         # Signup export rows. When present they are the source of truth for daily registrations / API users.
@@ -262,7 +270,7 @@ def creators_view(enqueue_stale=True):
     with db() as c:
         names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM campaigns")}
         prof = {r["key"]: dict(r) for r in c.execute("SELECT * FROM creators")}
-        posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE author IS NOT NULL AND author != ''")]
+        posts = [dict(r) for r in c.execute(f"SELECT * FROM posts WHERE author IS NOT NULL AND author != '' AND {INCLUDED}")]
     rows, stale = {}, []
     for p in posts:
         k = creator_key(p["platform"], p["author"])
@@ -272,12 +280,12 @@ def creators_view(enqueue_stale=True):
             r["waves"].append(names.get(p["campaign_id"]))
         e = sum(p[m] for m in METRICS[1:])
         r["posts"] += 1
-        r["paid"] += p["budget"] or 0
+        r["paid"] += cost(p)
         r["views"] += p["views"]
         r["eng"] += e
         if p["views"]:
             r["eng_v"] += e
-            r["spend_v"] += p["budget"] or 0
+            r["spend_v"] += cost(p)
         r["post_urls"].append(p["url"])
     out = []
     for k, r in rows.items():
@@ -517,14 +525,16 @@ def report(campaign_ids=None, top=5):
         for camp in camps:
             if campaign_ids and camp["id"] not in campaign_ids:
                 continue
-            posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE campaign_id=?", (camp["id"],))]
+            # Excluded posts stay in the wave's list but don't count toward any total
+            posts = [dict(r) for r in c.execute(f"SELECT * FROM posts WHERE campaign_id=? AND {INCLUDED}", (camp["id"],))]
+            n_excluded = c.execute("SELECT count(*) FROM posts WHERE campaign_id=? AND excluded=1", (camp["id"],)).fetchone()[0]
             eng = lambda p: sum(p[k] for k in METRICS[1:])  # noqa: E731
             days = (by_users or {}).get(camp["id"], []) if by_users is not None else \
                 [dict(r) for r in c.execute("SELECT * FROM days WHERE campaign_id=?", (camp["id"],))]
-            x_spend = sum(p["budget"] or 0 for p in posts)          # all paid posts, any platform
+            x_spend = sum(cost(p) for p in posts)          # all paid posts, any platform
             total = x_spend + (camp["other_spend"] or 0)
-            spend_v = sum(p["budget"] or 0 for p in posts if p["views"])   # CPM only over posts with views
-            spend_e = sum(p["budget"] or 0 for p in posts if eng(p))
+            spend_v = sum(cost(p) for p in posts if p["views"])   # CPM only over posts with views
+            spend_e = sum(cost(p) for p in posts if eng(p))
             views = sum(p["views"] for p in posts)
             e_all, e_v = sum(eng(p) for p in posts), sum(eng(p) for p in posts if p["views"])
             regs = sum(d["registrations"] for d in days)
@@ -534,7 +544,7 @@ def report(campaign_ids=None, top=5):
                 a = creators.setdefault(p["author"] or p["url"], {"creator": p["author"] or p["url"], "platform": p["platform"] or "x",
                                                                     "posts": 0, "cost": 0, "views": 0, "engagements": 0})
                 a["posts"] += 1
-                a["cost"] += p["budget"] or 0
+                a["cost"] += cost(p)
                 a["views"] += p["views"]
                 a["engagements"] += eng(p)
             paid = [a for a in creators.values() if a["cost"] > 0 and a["views"] > 0]
@@ -548,9 +558,9 @@ def report(campaign_ids=None, top=5):
                 a["rank_score"] = (by_cpm.index(a) + by_cpe.index(a)) / 2 + 1
             ranked = sorted(paid, key=lambda a: (a["rank_score"], a["cpm"]))
             out.append({
-                "id": camp["id"], "name": camp["name"], "posts": len(posts),
+                "id": camp["id"], "name": camp["name"], "posts": len(posts), "excluded_posts": n_excluded,
                 "first_post_utc": min((p["created_at"] for p in posts if p["created_at"]), default=None),
-                "posts_spend": x_spend, "by_platform": {pl: sum(p["budget"] or 0 for p in posts if (p["platform"] or "x") == pl)
+                "posts_spend": x_spend, "by_platform": {pl: sum(cost(p) for p in posts if (p["platform"] or "x") == pl)
                                                         for pl in sorted({p["platform"] or "x" for p in posts})},
                 "other_spend": camp["other_spend"] or 0, "total_budget": total,
                 "avg_cost_per_post": r2(dv(x_spend, len(posts))),
@@ -591,24 +601,24 @@ def export_csv(campaign_id):
     buf = io.StringIO()
     w = csv.writer(buf)
     camp = next(c for c in s["campaigns"] if c["id"] == campaign_id)
-    x_spend = sum(p["budget"] or 0 for p in s["posts"])
+    x_spend = sum(cost(p) for p in s["posts"] if not p["excluded"])
     w.writerow(["posts_spend", "other_spend", "other_note", "total_budget"])
     w.writerow([x_spend, camp["other_spend"] or 0, camp["other_note"] or "", x_spend + (camp["other_spend"] or 0)])
     w.writerow([])
-    w.writerow(["day", "platform", "url", "author", "note", "budget", *METRICS, "engagements", "er_pct", "cpm", "cpe"])
+    w.writerow(["day", "platform", "url", "author", "note", "budget", "excluded_from_total", *METRICS, "engagements", "er_pct", "cpm", "cpe"])
     for p in s["posts"]:
         eng = sum(p[k] for k in METRICS[1:])
-        v, b = p["views"], p["budget"] or 0
-        w.writerow([p["day"], p["platform"] or "x", p["url"], p["author"], p["note"] or "", b, *[p[k] for k in METRICS], eng,
+        v, b = p["views"], cost(p)
+        w.writerow([p["day"], p["platform"] or "x", p["url"], p["author"], p["note"] or "", p["budget"] or 0, "yes" if p["excluded"] else "", *[p[k] for k in METRICS], eng,
                     round(eng / v * 100, 3) if v else "", round(b / v * 1000, 2) if v else "",
                     round(b / eng, 3) if eng else ""])
     w.writerow([])
     w.writerow(["day", "spend", "views", "engagements", "registrations", "api_users",
                 "cost_per_registration", "cost_per_api_user", "reg_to_api_pct"])
     by_day = {}
-    for p in s["posts"]:
+    for p in (p for p in s["posts"] if not p["excluded"]):
         d = by_day.setdefault(p["day"] or "", {"spend": 0, "views": 0, "eng": 0, "reg": 0, "api": 0})
-        d["spend"] += p["budget"] or 0
+        d["spend"] += cost(p)
         d["views"] += p["views"]
         d["eng"] += sum(p[k] for k in METRICS[1:])
     for r in s["days"]:
@@ -899,7 +909,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/posts/update":
                 row = c.execute("SELECT platform FROM posts WHERE id=?", (b["id"],)).fetchone()
                 typed = [k for k in METRICS if k not in platforms.AUTO_METRICS[(row["platform"] if row else None) or "x"]]
-                fields = {k: b[k] for k in ("budget", "day", "note", *typed) if k in b}
+                if "excluded" in b:
+                    b["excluded"] = 1 if b["excluded"] else 0
+                fields = {k: b[k] for k in ("budget", "day", "note", "excluded", *typed) if k in b}
                 if fields:
                     c.execute(f"UPDATE posts SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?",
                               (*fields.values(), b["id"]))
