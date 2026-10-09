@@ -14,6 +14,7 @@ import io
 import json
 import os
 import queue
+import re
 import shutil
 import sqlite3
 import sys
@@ -420,7 +421,17 @@ def _parse_time(s, tz):
             except ValueError:
                 pass
     if t is None:
-        return None
+        # Newer exports drop the year ("Oct 9, 3:56 AM"): take the most recent year that isn't in the future
+        for f in ("%b %d, %I:%M %p", "%b %d %I:%M %p"):
+            try:
+                t = datetime.strptime(f"{datetime.now(tz).year} {s}", "%Y " + f)
+                break
+            except ValueError:
+                pass
+        if t is None:
+            return None
+        if t.replace(tzinfo=tz) > datetime.now(tz) + timedelta(days=1):
+            t = t.replace(year=t.year - 1)
     if t.tzinfo is None:
         t = t.replace(tzinfo=tz)
     return t.astimezone(timezone.utc)
@@ -432,7 +443,8 @@ def import_users(csv_text, tz_name="America/Los_Angeles"):
     rows = list(csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff"))))
     if not rows:
         raise ValueError("CSV has no rows")
-    cols = {k.lower().strip(): k for k in rows[0].keys() if k}
+    # Normalise header names so "Signed up" / "signed_up" and "Requests (all)" / "requests_all" match alike
+    cols = {re.sub(r"[^a-z0-9]+", "_", k.lower()).strip("_"): k for k in rows[0].keys() if k}
 
     def col(*names):
         return next((cols[n] for n in names if n in cols), None)
@@ -440,8 +452,10 @@ def import_users(csv_text, tz_name="America/Los_Angeles"):
     c_time = col("signed_up", "signup", "signed_up_at", "created_at", "created", "registered", "signup_date", "date")
     if not c_email or not c_time:
         raise ValueError(f"Need an email and a signup-time column; got: {', '.join(cols.values())}")
-    c_keys, c_req, c_req7 = col("keys", "api_keys"), col("requests_all", "requests", "total_requests"), col("requests_7d")
-    c_credit, c_method, c_ref = col("credit"), col("sign_in_method"), col("ref", "referral", "utm_source", "referrer")
+    c_keys, c_req = col("keys", "api_keys"), col("requests_all", "total_requests", "requests")
+    # "Requests" is the last-7-days count when an all-time column exists next to it
+    c_req7 = col("requests_7d") or (cols.get("requests") if c_req != cols.get("requests") else None)
+    c_credit, c_method, c_ref = col("credit"), col("sign_in_method", "sign_in"), col("ref", "referral", "utm_source", "referrer")
     ok, bad = 0, 0
     with _db_lock, db() as c:
         for r in rows:
