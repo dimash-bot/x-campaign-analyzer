@@ -95,6 +95,13 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["csv_text"], "properties": {
          "csv_text": {"type": "string", "description": "The full CSV file content"},
          "timezone": {"type": "string", "description": "IANA timezone of the signup times, default America/Los_Angeles"}}}},
+    {"name": "add_registrations",
+     "description": "Record signups for a wave by hand (when there's no signup CSV for them): registrations and API users "
+                    "for a day. These are ADDED to whatever the imported CSV gives for that wave and day; calling again "
+                    "for the same day replaces the manual numbers. Use 0/0 to remove a manual entry.",
+     "inputSchema": {"type": "object", "required": ["campaign", "day", "registrations"], "properties": {
+         "campaign": _campaign_arg(), "day": {"type": "string", "description": "YYYY-MM-DD (UTC)"},
+         "registrations": {"type": "integer"}, "api_users": {"type": "integer", "description": "users who made ≥1 API request"}}}},
     {"name": "get_report",
      "description": "Dashboard numbers per campaign (spend by platform, views, ER, CPM, CPE, registrations, API users, "
                     "cost per registration / API user) plus creators ranked by cost efficiency. CPM/ER only count posts "
@@ -206,6 +213,18 @@ def call_tool(app, user, name, args):
             result = {"added": len(added), "updated_existing": len(updated), "invalid_links": invalid,
                       "total_cost_in_request": sum(float(p.get("cost") or 0) for p in args["posts"]),
                       "note": "Metrics are being fetched in the background (~1s per post)."}
+        elif name == "add_registrations":
+            cid = _campaign_id(app, c, args["campaign"])
+            day = str(args["day"])[:10]
+            regs, api = int(args.get("registrations") or 0), int(args.get("api_users") or 0)
+            if regs or api:
+                c.execute("""INSERT INTO days(campaign_id, day, registrations, api_users) VALUES (?,?,?,?)
+                             ON CONFLICT(campaign_id, day) DO UPDATE SET registrations=excluded.registrations,
+                             api_users=excluded.api_users""", (cid, day, regs, api))
+            else:
+                c.execute("DELETE FROM days WHERE campaign_id=? AND day=?", (cid, day))
+            result = {"campaign": cid, "day": day, "manual_registrations": regs, "manual_api_users": api,
+                      "note": "added on top of CSV-imported users for that day"}
         elif name == "set_pack_price":
             cid = _campaign_id(app, c, args["campaign"])
             ids = [_post(app, c, cid, u)["id"] for u in args.get("urls") or []] or None

@@ -382,16 +382,12 @@ def state(campaign_id):
     with db() as c:
         campaigns = [dict(r) for r in c.execute("SELECT * FROM campaigns ORDER BY id")]
         posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE campaign_id=? ORDER BY day, id", (campaign_id,))]
-        by_users = user_days(c)
-        if by_users is None:
-            days = [dict(r) for r in c.execute("SELECT * FROM days WHERE campaign_id=? ORDER BY day", (campaign_id,))]
-        else:
-            days = by_users.get(campaign_id, [])
+        days = wave_days(c, campaign_id, user_days(c))
         n_users = c.execute("SELECT count(*) FROM users").fetchone()[0]
     with _pending_lock:
         pending = [p["id"] for p in posts if p["id"] in _pending]
     return {"campaigns": campaigns, "posts": posts, "days": days, "pending": pending,
-            "days_source": "users" if by_users is not None else "manual", "users_total": n_users}
+            "users_total": n_users}
 
 
 # ---------------------------------------------------------------- users → waves
@@ -514,6 +510,38 @@ def user_days(c):
     return {cid: sorted(v.values(), key=lambda d: d["day"]) for cid, v in agg.items()}
 
 
+def wave_days(c, campaign_id, by_users):
+    """Daily registrations / API users for a wave = users from the signup CSV + numbers typed in by hand
+    (the `days` table), added together. Each row says how much of it was manual so the UI can edit/remove it."""
+    merged = {}
+    for d in (by_users or {}).get(campaign_id, []):
+        merged[d["day"]] = {**d, "csv_registrations": d["registrations"], "csv_api_users": d["api_users"],
+                            "manual_registrations": 0, "manual_api_users": 0}
+    for r in c.execute("SELECT day, registrations, api_users FROM days WHERE campaign_id=?", (campaign_id,)):
+        d = merged.setdefault(r[0], {"day": r[0], "registrations": 0, "api_users": 0, "flagged": 0,
+                                     "csv_registrations": 0, "csv_api_users": 0})
+        d["registrations"] += r[1] or 0
+        d["api_users"] += r[2] or 0
+        d["manual_registrations"], d["manual_api_users"] = r[1] or 0, r[2] or 0
+    return sorted(merged.values(), key=lambda d: d["day"])
+
+
+def drop_manual_days_duplicating_csv():
+    """Manual day rows typed in before a signup CSV was imported would now be counted twice (manual numbers are
+    added on top of the CSV). Remove the ones that exactly match what the CSV gives for that wave and day."""
+    with _db_lock, db() as c:
+        by_users = user_days(c)
+        if not by_users:
+            return 0
+        csv_rows = {(cid, d["day"]): (d["registrations"], d["api_users"]) for cid, rows in by_users.items() for d in rows}
+        dupes = [(r[0], r[1]) for r in c.execute("SELECT campaign_id, day, registrations, api_users FROM days")
+                 if csv_rows.get((r[0], r[1])) == (r[2], r[3])]
+        c.executemany("DELETE FROM days WHERE campaign_id=? AND day=?", dupes)
+    if dupes:
+        print(f"removed {len(dupes)} manual day rows that duplicated the signup CSV", flush=True)
+    return len(dupes)
+
+
 def report(campaign_ids=None, top=5):
     """Dashboard numbers per campaign + creators ranked by average of CPM rank and CPE rank."""
     r2 = lambda x: round(x, 2) if x is not None else None  # noqa: E731
@@ -529,8 +557,7 @@ def report(campaign_ids=None, top=5):
             posts = [dict(r) for r in c.execute(f"SELECT * FROM posts WHERE campaign_id=? AND {INCLUDED}", (camp["id"],))]
             n_excluded = c.execute("SELECT count(*) FROM posts WHERE campaign_id=? AND excluded=1", (camp["id"],)).fetchone()[0]
             eng = lambda p: sum(p[k] for k in METRICS[1:])  # noqa: E731
-            days = (by_users or {}).get(camp["id"], []) if by_users is not None else \
-                [dict(r) for r in c.execute("SELECT * FROM days WHERE campaign_id=?", (camp["id"],))]
+            days = wave_days(c, camp["id"], by_users)
             x_spend = sum(cost(p) for p in posts)          # all paid posts, any platform
             total = x_spend + (camp["other_spend"] or 0)
             spend_v = sum(cost(p) for p in posts if p["views"])   # CPM only over posts with views
@@ -851,7 +878,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/users/import":
             tz = parse_qs(u.query).get("tz", ["America/Los_Angeles"])[0]
             try:
-                return self._send(200, import_users(self._body_bytes().decode("utf-8", "replace"), tz))
+                res = import_users(self._body_bytes().decode("utf-8", "replace"), tz)
+                drop_manual_days_duplicating_csv()
+                return self._send(200, res)
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/restore":
@@ -861,6 +890,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
             print(f"restore by {user['email']}", flush=True)
+            drop_manual_days_duplicating_csv()
             return self._send(200, {"ok": True})
 
         b = json.loads(self._body_bytes() or b"{}")
@@ -950,6 +980,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     auth.check_config()
     init_db()
+    drop_manual_days_duplicating_csv()
     threading.Thread(target=fetch_worker, daemon=True).start()
     threading.Thread(target=backup_worker, daemon=True).start()
     print(f"X campaign analyzer → http://{HOST}:{PORT}  (data: {DB_PATH}, login: {'Google @' + auth.ALLOWED_DOMAIN if auth.ENABLED else 'OFF'})", flush=True)
