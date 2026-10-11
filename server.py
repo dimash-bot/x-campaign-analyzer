@@ -117,7 +117,10 @@ def init_db():
         # Account-quality inputs: prospects added by hand (not paid yet), profile age/lists/bio, and shape of their recent posts
         for col, decl in [("prospect", "INTEGER DEFAULT 0"), ("added_at", "TEXT"), ("joined", "TEXT"), ("listed", "INTEGER"),
                           ("bio", "TEXT"), ("default_avatar", "INTEGER"), ("posts_90d", "INTEGER"), ("reply_like", "REAL"),
-                          ("bookmark_like", "REAL"), ("spike", "REAL"), ("boosted", "INTEGER"), ("quote_price", "REAL")]:
+                          ("bookmark_like", "REAL"), ("spike", "REAL"), ("boosted", "INTEGER"), ("quote_price", "REAL"),
+                          # bot check of their newest followers (Apify sample)
+                          ("f_sample", "INTEGER"), ("f_bot", "REAL"), ("f_inactive", "REAL"), ("f_examples", "TEXT"),
+                          ("f_at", "TEXT"), ("f_error", "TEXT")]:
             add_col("creators", col, decl)
         # Their own recent posts, pasted as links when X won't list the timeline (no login). Read like wave posts.
         c.execute("""CREATE TABLE IF NOT EXISTS sample_posts (
@@ -230,6 +233,8 @@ def apply_pack(c, campaign_id, ids, total, note=None):
 
 CREATOR_TTL_H = 24          # refresh profiles / baselines once a day
 APIFY_TTL_H = 72            # re-pull recent posts through Apify at most every 3 days (it costs per post)
+FOLLOWERS_TTL_H = 24 * 14   # re-check their newest followers every 2 weeks
+FOLLOWER_SAMPLE = 200
 _apify_busy = set()         # creator keys with an Apify pull in flight, shown as "analyzing…"
 _apify_slots = threading.Semaphore(3)
 
@@ -289,6 +294,8 @@ def fetch_creator(client, key, handle):
         if apify_client.enabled():
             err = None
             start_apify(key, prof["handle"])
+    if apify_client.enabled():
+        start_followers(key, prof["handle"])
     with _db_lock, db() as c:
         c.execute("""INSERT INTO creators(key, platform, handle) VALUES (?, 'x', ?) ON CONFLICT(key) DO NOTHING""", (key, prof["handle"]))
         c.execute("""UPDATE creators SET handle=?, name=?, user_id=?, avatar=?, followers=?, following=?, posts_count=?,
@@ -301,6 +308,9 @@ def fetch_creator(client, key, handle):
         if base:   # don't overwrite numbers someone entered by hand / via Claude with nothing
             c.execute(f"""UPDATE creators SET {", ".join(f"{k}=?" for k in base)}, baseline_source='x', baseline_at=?
                           WHERE key=?""", (*base.values(), now(), key))
+
+
+F_BOT_FLAG, F_BOT_KILL = 40, 50   # % bot-like among their newest followers. Our 43 creators: median 28%, top quarter 35%+, so these mark outliers (~1.5-2x typical)
 
 
 def account_checks(pr):
@@ -328,6 +338,12 @@ def account_checks(pr):
             flags.append(f"{pr['posts_count'] / days:.0f} posts a day since joining: automation or reply farming")
     if pr.get("default_avatar"):
         flags.append("default avatar")
+    fb = pr.get("f_bot")
+    if fb is not None:
+        if fb > F_BOT_KILL:
+            kills.append(f"{fb:.0f}% of their newest followers look like bots (> {F_BOT_KILL}%): bought followers")
+        elif fb > F_BOT_FLAG:
+            flags.append(f"{fb:.0f}% of their newest followers look like bots (> {F_BOT_FLAG}%)")
     n90 = pr.get("posts_90d")
     if n90 is not None:
         if n90 < 10:
@@ -446,6 +462,87 @@ def apify_baseline(key, handle):
     finally:
         with _pending_lock:
             _apify_busy.discard(key)
+
+
+GENERATED_HANDLE = re.compile(r"^[A-Za-z_]+\d{6,}$")   # X's default handle: name + 8 digits
+
+
+def follower_signals(u):
+    """Fake-account signals for one follower (Cresci et al. 'Fame for sale': age, following/followers, posts,
+    default profile, no bio are the cheap features that catch bought followers)."""
+    today = datetime.now(timezone.utc)
+    sig = []
+    if u["created_at"] and (today - datetime.fromisoformat(u["created_at"])).days < 90:
+        sig.append("new account")
+    if u["default_avatar"]:
+        sig.append("default avatar")
+    if not u["bio"]:
+        sig.append("no bio")
+    if u["posts"] <= 5:
+        sig.append("≤5 posts")
+    if u["followers"] < 10:
+        sig.append("<10 followers")
+    if u["following"] >= 100 and u["following"] > 20 * max(1, u["followers"]):
+        sig.append("follows 20× more than follow it")
+    if GENERATED_HANDLE.match(u["handle"]):
+        sig.append("auto-generated handle")
+    return sig
+
+
+def follower_check(key, handle):
+    """Sample their newest followers and score each: bot-like = 3+ fake-account signals,
+    inactive = not bot-like but never posted or silent for 6+ months (real but nobody reads)."""
+    try:
+        with _apify_slots:
+            users = apify_client.newest_followers(handle, FOLLOWER_SAMPLE)
+        if not users:
+            raise RuntimeError("no followers returned")
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=180)).isoformat()
+        bots, inactive = [], 0
+        for u in users:
+            sig = follower_signals(u)
+            if len(sig) >= 3:
+                bots.append((u["handle"], sig))
+            elif u["posts"] == 0 or not u["last_post_at"] or u["last_post_at"] < cutoff:
+                inactive += 1
+        examples = json.dumps([{"handle": h, "signals": sg} for h, sg in bots[:6]], ensure_ascii=False)
+        with _db_lock, db() as c:
+            c.execute("""UPDATE creators SET f_sample=?, f_bot=?, f_inactive=?, f_examples=?, f_at=?, f_error=NULL WHERE key=?""",
+                      (len(users), round(len(bots) / len(users) * 100, 1), round(inactive / len(users) * 100, 1),
+                       examples, now(), key))
+    except Exception as e:  # noqa: BLE001
+        print(f"followers {handle} failed: {e}", flush=True)
+        with _db_lock, db() as c:
+            c.execute("UPDATE creators SET f_error=?, f_at=? WHERE key=?", (str(e)[:200], now(), key))
+    finally:
+        with _pending_lock:
+            _apify_busy.discard("f:" + key)
+
+
+def start_followers(key, handle, force=False):
+    with db() as c:
+        row = c.execute("SELECT f_at, f_error FROM creators WHERE key=?", (key,)).fetchone()
+    if not force and row and row["f_at"] and not row["f_error"] and \
+            (datetime.now(timezone.utc) - datetime.fromisoformat(row["f_at"])).total_seconds() < FOLLOWERS_TTL_H * 3600:
+        return
+    with _pending_lock:
+        if "f:" + key in _apify_busy:
+            return
+        _apify_busy.add("f:" + key)
+    threading.Thread(target=follower_check, args=(key, handle), daemon=True).start()
+
+
+def backfill_creators():
+    """On start: every X creator missing their normal (median views / ER) or a follower check gets one."""
+    if not apify_client.enabled():
+        return
+    for r in creators_view(enqueue_stale=False)["creators"]:
+        if r["platform"] != "x":
+            continue
+        if r["median_views"] is None:
+            start_apify(r["key"], r["handle"])
+        if r["bot_followers_pct"] is None:
+            start_followers(r["key"], r["handle"])
 
 
 STATUS_RE = re.compile(r"(?:x|twitter)\.com/([A-Za-z0-9_]+)/status(?:es)?/(\d+)")
@@ -576,6 +673,9 @@ def creators_view(enqueue_stale=True):
             "sample_size": pr.get("sample_size"), "baseline_source": pr.get("baseline_source"), "baseline_note": pr.get("baseline_note"),
             "profile_error": err, "profile_at": pr.get("profile_at"),
             "quote_price": pr.get("quote_price"), "expected_cpm": expected_cpm, "samples": samples.get(k),
+            "bot_followers_pct": pr.get("f_bot"), "inactive_followers_pct": pr.get("f_inactive"),
+            "followers_sample": pr.get("f_sample"), "bot_examples": json.loads(pr["f_examples"]) if pr.get("f_examples") else [],
+            "followers_checked_at": pr.get("f_at"), "followers_error": pr.get("f_error"),
             "following": pr.get("following"), "posts_count": pr.get("posts_count"), "joined": pr.get("joined"), "bio": pr.get("bio"), "posts_90d": pr.get("posts_90d"),
             "reply_like": pr.get("reply_like"), "bookmark_like": pr.get("bookmark_like"),
             "prospect": not r["posts"],
@@ -596,7 +696,8 @@ def creators_view(enqueue_stale=True):
             enqueue(k, k, "creator", h)
     with _pending_lock:
         busy = {p.split(":", 1)[1].rsplit(":", 1)[0] for p in _pending if isinstance(p, str) and p.startswith("s:")}
-        pend = [r["key"] for r in out if r["key"] in _pending or r["key"] in busy or r["key"] in _apify_busy]
+        pend = [r["key"] for r in out if r["key"] in _pending or r["key"] in busy or r["key"] in _apify_busy
+                or "f:" + r["key"] in _apify_busy]
     return {"creators": out, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0")),
             "apify": apify_client.enabled()}
 
@@ -1357,5 +1458,6 @@ if __name__ == "__main__":
     drop_manual_days_duplicating_csv()
     threading.Thread(target=fetch_worker, daemon=True).start()
     threading.Thread(target=backup_worker, daemon=True).start()
+    threading.Thread(target=backfill_creators, daemon=True).start()
     print(f"X campaign analyzer → http://{HOST}:{PORT}  (data: {DB_PATH}, login: {'Google @' + auth.ALLOWED_DOMAIN if auth.ENABLED else 'OFF'})", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

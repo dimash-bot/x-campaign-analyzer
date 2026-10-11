@@ -69,6 +69,9 @@ td.rank { color: var(--muted); font-size: 12px; width: 1%; }
 .wavechip { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); margin-right: 3px; }
 .good { color: var(--good); font-weight: 650; }
 .bad { color: var(--bad); }
+td.warn { color: #b26b00; font-weight: 600; }
+@media (prefers-color-scheme: dark) { td.warn { color: #f0b45a; } }
+td.bad { font-weight: 650; }
 tr.goodrow td { background: color-mix(in srgb, var(--good) 11%, var(--surface)); }
 tr.goodrow td:first-child { box-shadow: inset 3px 0 0 var(--good); }
 .goodtag { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 0 6px; border-radius: 5px; margin-left: 4px;
@@ -167,12 +170,13 @@ button.x:hover { color: var(--bad); background: transparent; }
           <th class="l">#</th>
           <th class="l" data-sort="name">Creator</th>
           <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
+          <th data-sort="bot_followers_pct" title="Share of their 200 newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
           <th data-sort="followers" class="colsep"><span class="grp">Profile</span>Followers</th>
           <th data-sort="median_views"><span class="grp">Their normal</span>Median views</th>
           <th data-sort="median_er"><span class="grp">Their normal</span>ER</th>
           <th data-sort="posts" class="colsep"><span class="grp">With us</span>Posts</th>
           <th data-sort="paid"><span class="grp">With us</span>Paid</th>
-          <th data-sort="avg_views"><span class="grp">With us</span>Avg views</th>
+          <th data-sort="views" title="Total views of all our paid posts with them"><span class="grp">With us</span>Views</th>
           <th data-sort="vs_median"><span class="grp">With us</span>vs median</th>
           <th data-sort="reach_pct"><span class="grp">With us</span>Reach</th>
           <th data-sort="er_pct"><span class="grp">With us</span>ER</th>
@@ -185,12 +189,15 @@ button.x:hover { color: var(--bad); background: transparent; }
     </div>
     <div class="legend">
       <b>Median views / ER (their normal)</b>: median over their last ~30 own posts, excluding the ones we paid for.
+      <b>Views (with us)</b>: total views of all our paid posts with them (hover for the per-post average).
       <b>vs median</b>: avg views of our paid post ÷ their median (above 1× = our post beat their usual post).
       <b>Reach</b>: avg views of our post ÷ followers. <b>$ / 1K followers</b>: price per post ÷ followers × 1,000 (rate-card benchmark).
       CPM, ER and CPE only count posts that have views.
       <b>Quality</b>: checks on the account itself (following ÷ followers, account age vs followers, posts a day, original posts in
       90 days, median views ÷ followers, their ER, replies per like, viral-only reach, boosted posts) plus, once we've paid them, how our post did
-      (ER, replies per like, CPM, views vs their usual). <b>Bad</b> = any hard fail or 3+ warnings · <b>Test</b> = 1–2 warnings, try small ·
+      (ER, replies per like, CPM, views vs their usual). <b>Bot followers</b>: of their 200 newest followers, the share with 3+
+      fake-account signals (new account, default avatar, no bio, ≤5 posts, &lt;10 followers, follows 20× more than follow it,
+      auto-generated handle). Typical is ~28%; over 40% is a warning, over 50% a hard fail. <b>Bad</b> = any hard fail or 3+ warnings · <b>Test</b> = 1–2 warnings, try small ·
       <b>Good</b> (green row) = no warnings · <b>Profile only</b> = no post numbers yet (their recent posts need the X login).
       Hover the badge for the full explanation.
     </div>
@@ -244,6 +251,7 @@ let D = { creators: [], pending: [], x_login: false }, timer = null, waveWanted 
 
 let sort = { key: "paid", dir: "desc" };
 try { sort = JSON.parse(localStorage.getItem("xca_csort")) || sort; } catch (e) {}
+if (sort.key === "avg_views") sort.key = "views";   // column now shows total views with us
 const LOW_FIRST = new Set(["name", "cpm", "cpe", "price_per_1k_followers"]);
 
 async function api(path, body) {
@@ -326,12 +334,13 @@ function render() {
         : `<span class="pill ${q.verdict}" tabindex="0" data-tip="${esc(c.key)}">${{ good: "Good", test: "Test", bad: "Bad", partial: "Profile only" }[q.verdict]}${reasons.length ? ` · ${reasons.length}` : ""}</span>`
           + (c.platform === "x" ? `<button class="x" title="Quoted price / their post links" data-check="${esc(c.key)}">✎</button>` : "")
           + (why ? `<span class="why" data-tip="${esc(c.key)}">${esc(why)}</span>` : "")}</td>
+      <td data-tip="${esc(c.key)}" class="${c.bot_followers_pct > 50 ? "bad" : c.bot_followers_pct > 40 ? "warn" : ""}">${ok(c.bot_followers_pct) ? c.bot_followers_pct.toFixed(0) + "%" : c.followers_error ? `<span class="err" title="${esc(c.followers_error)}">—</span>` : "—"}</td>
       ${cell(c, "followers", fmtN, "colsep")}
       ${cell(c, "median_views", fmtN)}
       ${cell(c, "median_er", (v) => pct(v))}
       <td class="colsep">${c.prospect ? "—" : c.posts}</td>
       <td>${c.prospect ? "—" : fmt$(c.paid, 0)}</td>
-      <td>${fmtN(c.avg_views)}</td>
+      <td title="${c.posts > 1 ? `${c.posts} posts · avg ${fmtN(c.avg_views)} each` : ""}">${c.prospect ? "—" : fmtN(c.views)}</td>
       <td class="${ok(vm) ? (vm >= 1 ? "good" : vm < 0.5 ? "bad" : "") : ""}">${ok(vm) ? vm.toFixed(2) + "×" : "—"}</td>
       <td>${pct(c.reach_pct, 1)}</td>
       <td>${pct(c.er_pct)}</td>
@@ -339,7 +348,7 @@ function render() {
       <td>${fmt$(c.cpe)}</td>
       <td>${fmt$(c.price_per_1k_followers)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="15" class="empty">No influencers match.</td></tr>`;
+  }).join("") : `<tr><td colspan="16" class="empty">No influencers match.</td></tr>`;
 }
 
 const editing = () => document.activeElement?.tagName === "INPUT" && document.activeElement.closest("#rows");
@@ -402,6 +411,11 @@ function tipHtml(c) {
         ...(ok(c.median_views) ? ["Their posts: reach enough of their followers, no paid-boost pattern",
           "Their posts: engagement and replies per like in the healthy range"] : []),
         ...(ok(c.er_pct) ? ["Our post: normal engagement, real replies, fair CPM"] : [])])}</ul>` : "")
+    + (ok(c.bot_followers_pct) ? `<div class="sec">Their ${c.followers_sample} newest followers</div>
+        <div class="nums"><span>Look like bots</span><span>${c.bot_followers_pct.toFixed(0)}% <span class="muted">(warning > 40%, fail > 50%; typical ~28%)</span></span>
+        <span>Real but inactive</span><span>${ok(c.inactive_followers_pct) ? c.inactive_followers_pct.toFixed(0) + "%" : "—"}</span></div>`
+        + (c.bot_examples.length ? `<ul style="margin-top:4px">${c.bot_examples.slice(0, 4).map((b) =>
+          `<li class="flag">@${esc(b.handle)}: ${esc(b.signals.join(", "))}</li>`).join("")}</ul>` : "") : "")
     + (nums.length ? `<div class="sec">Numbers</div><div class="nums">${nums.map(([k, v]) => `<span>${k}</span><span>${esc(String(v))}</span>`).join("")}</div>` : "")
     + (!ok(c.median_views) && c.platform === "x"
       ? `<div class="foot">Their recent posts weren't checked yet — ${D.apify ? "Apify pulls them on the next refresh, or paste a few links with ✎." : "set APIFY_TOKEN (or the X login), or paste a few of their post links with ✎."} ${q.verdict === "partial" ? "Until then this account can't be rated Good." : ""}</div>` : "")
