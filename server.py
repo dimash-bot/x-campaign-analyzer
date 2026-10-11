@@ -25,6 +25,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
+import apify_client
 import auth
 import mcp_server
 import platforms
@@ -113,6 +114,17 @@ def init_db():
             followers INTEGER, following INTEGER, posts_count INTEGER, verified INTEGER,
             median_views INTEGER, median_likes INTEGER, median_eng INTEGER, median_er REAL, sample_size INTEGER,
             baseline_source TEXT, baseline_note TEXT, profile_at TEXT, baseline_at TEXT, error TEXT)""")
+        # Account-quality inputs: prospects added by hand (not paid yet), profile age/lists/bio, and shape of their recent posts
+        for col, decl in [("prospect", "INTEGER DEFAULT 0"), ("added_at", "TEXT"), ("joined", "TEXT"), ("listed", "INTEGER"),
+                          ("bio", "TEXT"), ("default_avatar", "INTEGER"), ("posts_90d", "INTEGER"), ("reply_like", "REAL"),
+                          ("bookmark_like", "REAL"), ("spike", "REAL"), ("boosted", "INTEGER"), ("quote_price", "REAL")]:
+            add_col("creators", col, decl)
+        # Their own recent posts, pasted as links when X won't list the timeline (no login). Read like wave posts.
+        c.execute("""CREATE TABLE IF NOT EXISTS sample_posts (
+            creator_key TEXT NOT NULL, tweet_id TEXT NOT NULL, url TEXT, created_at TEXT,
+            views INTEGER, likes INTEGER, retweets INTEGER, quotes INTEGER, replies INTEGER, bookmarks INTEGER,
+            fetched_at TEXT, error TEXT, PRIMARY KEY (creator_key, tweet_id))""")
+        add_col("sample_posts", "source", "TEXT")   # links (pasted) | apify
         if not c.execute("SELECT 1 FROM campaigns").fetchone():
             c.execute("INSERT INTO campaigns(name, created_at) VALUES (?, ?)", ("My first campaign", now()))
 
@@ -125,7 +137,7 @@ _pending_lock = threading.Lock()
 
 
 def enqueue(post_id, key, platform="x", url=None):
-    if platform not in ("x", "linkedin", "creator"):
+    if platform not in ("x", "linkedin", "creator", "sample"):
         return                                  # nothing public to fetch; metrics are typed in
     with _pending_lock:
         if post_id in _pending:
@@ -148,6 +160,11 @@ def fetch_worker():
                 if client is None:
                     client = XClient()
                 fetch_creator(client, post_id, url)
+                continue
+            if platform == "sample":            # one of their own posts: key = tweet id, url = creator key
+                if client is None:
+                    client = XClient()
+                fetch_sample(client, url, key)
                 continue
             if platform == "linkedin":
                 m = platforms.fetch_linkedin(url)
@@ -172,7 +189,10 @@ def fetch_worker():
             if "guest" in str(e).lower():
                 client = None
             with _db_lock, db() as c:
-                if platform == "creator":
+                if platform == "sample":
+                    c.execute("UPDATE sample_posts SET error=?, fetched_at=? WHERE creator_key=? AND tweet_id=?",
+                              (str(e)[:200], now(), url, key))
+                elif platform == "creator":
                     c.execute("INSERT INTO creators(key, platform, handle) VALUES (?, 'x', ?) ON CONFLICT(key) DO NOTHING", (post_id, url))
                     c.execute("UPDATE creators SET error=?, profile_at=? WHERE key=?", (str(e)[:200], now(), post_id))
                 else:
@@ -209,6 +229,9 @@ def apply_pack(c, campaign_id, ids, total, note=None):
 # ---------------------------------------------------------------- creators (influencers)
 
 CREATOR_TTL_H = 24          # refresh profiles / baselines once a day
+APIFY_TTL_H = 72            # re-pull recent posts through Apify at most every 3 days (it costs per post)
+_apify_busy = set()         # creator keys with an Apify pull in flight, shown as "analyzing…"
+_apify_slots = threading.Semaphore(3)
 
 
 def creator_key(platform, author):
@@ -235,33 +258,271 @@ def fetch_creator(client, key, handle):
         print(f"creator renamed: @{handle} -> @{new}", flush=True)
         enqueue(creator_key("x", new), creator_key("x", new), "creator", new)
         return
+    activity = None
     try:
         with db() as c:
             paid = {r[0] for r in c.execute("SELECT tweet_id FROM posts WHERE platform='x' OR platform IS NULL")}
         cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()   # "their normal" = the last 3 months
-        recent = [t for t in client.recent_posts(prof["user_id"], prof["handle"])
-                  if t["tweet_id"] not in paid and t["views"] and t["created_at"] >= cutoff][:30]
+        last90 = [t for t in client.recent_posts(prof["user_id"], prof["handle"]) if t["created_at"] >= cutoff]
+        activity = {"posts_90d": len(last90), "reply_like": None, "bookmark_like": None, "spike": None, "boosted": None}
+        recent = [t for t in last90 if t["tweet_id"] not in paid and t["views"]][:30]
         if len(recent) >= 3:
             eng = [t["likes"] + t["retweets"] + t["quotes"] + t["replies"] + t["bookmarks"] for t in recent]
-            base = {"median_views": int(statistics.median(t["views"] for t in recent)),
+            views = sorted(t["views"] for t in recent)
+            likes = sum(t["likes"] for t in recent)
+            base = {"median_views": int(statistics.median(views)),
                     "median_likes": int(statistics.median(t["likes"] for t in recent)),
                     "median_eng": int(statistics.median(eng)),
                     "median_er": round(statistics.median(e / t["views"] * 100 for e, t in zip(eng, recent)), 3),
                     "sample_size": len(recent),
                     "baseline_note": f"last {len(recent)} own posts {recent[-1]['created_at'][:10]} → {recent[0]['created_at'][:10]}"}
+            activity.update({
+                "reply_like": round(sum(t["replies"] for t in recent) / likes, 3) if likes else None,
+                "bookmark_like": round(sum(t["bookmarks"] for t in recent) / likes, 3) if likes else None,
+                "spike": round(views[int(0.9 * (len(views) - 1))] / max(1, base["median_views"]), 2),   # p90 ÷ median
+                # the paid-amplification signature: huge views, almost nobody engaging
+                "boosted": sum(1 for e, t in zip(eng, recent) if t["views"] > 200_000 and e / t["views"] < 0.0015)})
         else:
             err = f"only {len(recent)} own posts with views in the last 90 days"
     except NeedsLogin:
         err = "median views need a logged-in X session (X_AUTH_TOKEN / X_CT0)"
+        if apify_client.enabled():
+            err = None
+            start_apify(key, prof["handle"])
     with _db_lock, db() as c:
         c.execute("""INSERT INTO creators(key, platform, handle) VALUES (?, 'x', ?) ON CONFLICT(key) DO NOTHING""", (key, prof["handle"]))
         c.execute("""UPDATE creators SET handle=?, name=?, user_id=?, avatar=?, followers=?, following=?, posts_count=?,
-                     verified=?, profile_at=?, error=? WHERE key=?""",
+                     verified=?, joined=?, listed=?, bio=?, default_avatar=?, profile_at=?, error=? WHERE key=?""",
                   (prof["handle"], prof["name"], prof["user_id"], prof["avatar"], prof["followers"], prof["following"],
-                   prof["posts_count"], int(prof["verified"]), now(), err, key))
+                   prof["posts_count"], int(prof["verified"]), prof["joined"], prof["listed"], prof["bio"],
+                   int(prof["default_avatar"]), now(), err, key))
+        if activity:
+            c.execute(f"UPDATE creators SET {', '.join(f'{k}=?' for k in activity)} WHERE key=?", (*activity.values(), key))
         if base:   # don't overwrite numbers someone entered by hand / via Claude with nothing
             c.execute(f"""UPDATE creators SET {", ".join(f"{k}=?" for k in base)}, baseline_source='x', baseline_at=?
                           WHERE key=?""", (*base.values(), now(), key))
+
+
+def account_checks(pr):
+    """Pre-buy checks on the account itself: profile, activity, reach and engagement of their own recent posts.
+    Returns (kills, flags, judged_posts). A kill alone makes the account bad; flags add up.
+    Thresholds: fake-follower research (Cresci et al.: following/followers ratio and account age are the strongest
+    profile signals) + X engagement norms from our AI-account benchmark (~0.8% ER per view)."""
+    kills, flags = [], []
+    if "not found or suspended" in (pr.get("error") or ""):
+        return ["account not found or suspended on X"], flags, True
+    f, fo = pr.get("followers"), pr.get("following")
+    if f and fo is not None and f >= 1000:
+        ratio = fo / f
+        if ratio >= 0.9:
+            kills.append(f"follows {fo:,} / {f:,} followers: follow-for-follow audience")
+        elif ratio > 0.5:
+            flags.append(f"follows {ratio:.0%} as many accounts as follow it: follow-back growth")
+    if pr.get("joined") and f:
+        days = max(1, (datetime.now(timezone.utc).date() - datetime.fromisoformat(pr["joined"]).date()).days)
+        if days < 183 and f > 50_000:
+            kills.append(f"{f:,} followers on an account only {days} days old: bought followers?")
+        elif days < 365 and f > 20_000:
+            flags.append(f"{f:,} followers in {days} days: unusually fast growth")
+        if pr.get("posts_count") and pr["posts_count"] / days > 60:
+            flags.append(f"{pr['posts_count'] / days:.0f} posts a day since joining: automation or reply farming")
+    if pr.get("default_avatar"):
+        flags.append("default avatar")
+    n90 = pr.get("posts_90d")
+    if n90 is not None:
+        if n90 < 10:
+            kills.append(f"only {n90} original posts in 90 days: inactive or too little to judge")
+        elif n90 < 20:
+            flags.append(f"{n90} original posts in 90 days: low activity")
+    mv, er = pr.get("median_views"), pr.get("median_er")
+    judged = mv is not None or er is not None
+    if mv is not None and f:
+        vf = mv / f * 100
+        if vf < 0.5:
+            kills.append(f"median post reaches {vf:.1f}% of followers: dead or fake followers")
+        elif vf < 2:
+            flags.append(f"median post reaches {vf:.1f}% of followers (< 2%)")
+    if (pr.get("spike") or 0) > 15:
+        flags.append(f"top posts get {pr['spike']:.0f}× the median: reach depends on rare viral hits")
+    if pr.get("boosted"):
+        (kills if pr["boosted"] >= 3 else flags).append(
+            f"{pr['boosted']} post(s) with 200K+ views and < 0.15% engagement: paid amplification")
+    if er is not None:
+        if er < 0.3:
+            kills.append(f"their normal ER {er:.2f}% < 0.3%")
+        elif er < 0.8:
+            flags.append(f"their normal ER {er:.2f}% < 0.8%")
+    rl = pr.get("reply_like")
+    if rl is not None:
+        if rl < 0.01:
+            kills.append(f"{rl:.3f} replies per like on their posts: likes without conversation (bought likes?)")
+        elif rl < 0.03:
+            flags.append(f"{rl:.2f} replies per like on their posts (< 0.03)")
+        elif rl > 1:
+            flags.append(f"{rl:.2f} replies per like on their posts: reply pods or bots?")
+    return kills, flags, judged
+
+
+def campaign_checks(er_pct, replies_per_like, cpm, vs_median):
+    """How our paid posts with this creator did -> (kills, flags). Thresholds: our own paid posts (median CPM ~$50)."""
+    kills, flags = [], []
+    if er_pct is None:
+        return kills, flags
+    if er_pct < 0.8:
+        (kills if er_pct < 0.3 else flags).append(f"our post: ER {er_pct:.2f}% < {0.3 if er_pct < 0.3 else 0.8}%: views without involvement")
+    if replies_per_like is not None and replies_per_like < 0.03:
+        (kills if replies_per_like < 0.01 else flags).append(
+            f"our post: {replies_per_like:.3f} replies per like: likes without conversation (bought likes?)")
+    if replies_per_like is not None and replies_per_like > 1:
+        flags.append(f"our post: {replies_per_like:.2f} replies per like > 1: reply pods or bots?")
+    if cpm is not None and cpm > 100:
+        (kills if cpm > 200 else flags).append(f"our post: CPM ${cpm:.0f} > ${200 if cpm > 200 else 100}: overpriced for the views")
+    if vs_median is not None and vs_median < 0.5:
+        flags.append(f"our post got {vs_median:.2f}× their usual views")
+    return kills, flags
+
+
+def creator_quality(pr, er_pct, replies_per_like, cpm, vs_median, expected_cpm=None):
+    """Verdict for /influencers. good = no flags (green row) · test = 1-2 flags · bad = any kill or 3+ flags ·
+    partial = no post numbers yet (their own or ours), so only the profile was checked."""
+    kills, flags, judged = account_checks(pr)
+    ck, cf = campaign_checks(er_pct, replies_per_like, cpm, vs_median)
+    kills, flags = kills + ck, flags + cf
+    if er_pct is None and expected_cpm is not None:   # not paid yet: their quote ÷ their median views, same CPM bar
+        if expected_cpm > 100:
+            (kills if expected_cpm > 200 else flags).append(
+                f"expected CPM ${expected_cpm:.0f} at their ${pr['quote_price']:,.0f} quote > ${200 if expected_cpm > 200 else 100}: overpriced for their views")
+    judged = judged or er_pct is not None
+    if kills or len(flags) >= 3:
+        verdict = "bad"
+    elif not judged:
+        verdict = "partial"
+    else:
+        verdict = "test" if flags else "good"
+    return {"verdict": verdict, "good": verdict == "good", "kills": kills, "flags": flags}
+
+
+def start_apify(key, handle, force=False):
+    """Pull their last posts through Apify in the background, unless we did recently."""
+    with db() as c:
+        row = c.execute("SELECT baseline_source, baseline_at FROM creators WHERE key=?", (key,)).fetchone()
+    if not force and row and row["baseline_source"] == "apify" and row["baseline_at"] and \
+            (datetime.now(timezone.utc) - datetime.fromisoformat(row["baseline_at"])).total_seconds() < APIFY_TTL_H * 3600:
+        return
+    with _pending_lock:
+        if key in _apify_busy:
+            return
+        _apify_busy.add(key)
+    threading.Thread(target=apify_baseline, args=(key, handle), daemon=True).start()
+
+
+def apify_baseline(key, handle):
+    """Their last ~20 original posts (no reposts, no replies) via Apify -> sample_posts -> their normal."""
+    try:
+        with _apify_slots:
+            items = apify_client.recent_posts(handle)
+        own = [t for t in items if not t["is_retweet"] and not t["is_reply"] and t["author"].lower() == handle.lower()]
+        own.sort(key=lambda t: t["created_at"], reverse=True)
+        own = own[:20]
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        oldest = min((t["created_at"] for t in items if t["created_at"]), default="")
+        # only a real count when the pull reached back past 90 days (otherwise they post more than we pulled)
+        posts_90d = sum(t["created_at"] >= cutoff for t in own) if oldest and oldest < cutoff else None
+        with _db_lock, db() as c:
+            c.execute("DELETE FROM sample_posts WHERE creator_key=? AND source='apify'", (key,))
+            for t in own:
+                c.execute(f"""INSERT INTO sample_posts(creator_key, tweet_id, url, created_at, {", ".join(METRICS)}, fetched_at, source)
+                              VALUES (?,?,?,?,{",".join("?" * len(METRICS))},?, 'apify')
+                              ON CONFLICT(creator_key, tweet_id) DO UPDATE SET created_at=excluded.created_at,
+                              {", ".join(f"{m}=excluded.{m}" for m in METRICS)}, fetched_at=excluded.fetched_at, error=NULL""",
+                          (key, t["tweet_id"], t["url"], t["created_at"], *[t[m] for m in METRICS], now()))
+            c.execute("UPDATE creators SET posts_90d=?, error=? WHERE key=?",
+                      (posts_90d, None if own else "Apify found no original posts", key))
+        sample_baseline(key)
+    except Exception as e:  # noqa: BLE001 — show it on the creator row
+        print(f"apify {handle} failed: {e}", flush=True)
+        with _db_lock, db() as c:
+            c.execute("UPDATE creators SET error=? WHERE key=?", (f"Apify: {str(e)[:180]}", key))
+    finally:
+        with _pending_lock:
+            _apify_busy.discard(key)
+
+
+STATUS_RE = re.compile(r"(?:x|twitter)\.com/([A-Za-z0-9_]+)/status(?:es)?/(\d+)")
+
+
+def fetch_sample(client, key, tweet_id):
+    """Read one of their posts the same way as a wave post, then recompute their baseline from all pasted posts."""
+    m = client.fetch(tweet_id)
+    with _db_lock, db() as c:
+        c.execute(f"""UPDATE sample_posts SET created_at=?, {", ".join(f"{k}=?" for k in METRICS)}, fetched_at=?, error=NULL
+                      WHERE creator_key=? AND tweet_id=?""",
+                  (m["created_at"], *[m[k] for k in METRICS], now(), key, tweet_id))
+        if m["author"] and m["author"].lower() != key.partition(":")[2].lower():
+            c.execute("UPDATE sample_posts SET error=? WHERE creator_key=? AND tweet_id=?",
+                      (f"post is by @{m['author']}, not this account", key, tweet_id))
+    sample_baseline(key)
+
+
+def sample_baseline(key):
+    """Their normal, from the posts pasted as links — same numbers the X timeline would give (paid posts excluded).
+    A real timeline baseline (X login) wins: this only fills in when that's missing."""
+    with db() as c:
+        pr = c.execute("SELECT baseline_source FROM creators WHERE key=?", (key,)).fetchone()
+        paid = {r[0] for r in c.execute("SELECT tweet_id FROM posts WHERE platform='x' OR platform IS NULL")}
+        rows = [dict(r) for r in c.execute("""SELECT * FROM sample_posts WHERE creator_key=? AND error IS NULL AND views > 0
+                                               ORDER BY created_at DESC""", (key,))]
+    if not pr or pr["baseline_source"] not in (None, "links", "apify"):
+        return   # X timeline or numbers typed in by hand win
+    rows = [t for t in rows if t["tweet_id"] not in paid][:20]
+    source = "apify" if any(t["source"] == "apify" for t in rows) else "links"
+    cols = ["median_views", "median_likes", "median_eng", "median_er", "sample_size", "baseline_note",
+            "reply_like", "bookmark_like", "spike", "boosted"]
+    vals = dict.fromkeys(cols)
+    if len(rows) >= 3:
+        eng = [t["likes"] + t["retweets"] + t["quotes"] + t["replies"] + t["bookmarks"] for t in rows]
+        views = sorted(t["views"] for t in rows)
+        likes = sum(t["likes"] for t in rows)
+        dates = sorted((t["created_at"] or "")[:10] for t in rows if t["created_at"])
+        vals.update({
+            "median_views": int(statistics.median(views)), "median_likes": int(statistics.median(t["likes"] for t in rows)),
+            "median_eng": int(statistics.median(eng)),
+            "median_er": round(statistics.median(e / t["views"] * 100 for e, t in zip(eng, rows)), 3),
+            "sample_size": len(rows),
+            "baseline_note": f"last {len(rows)} own posts" + (" (Apify)" if source == "apify" else " (pasted links)")
+                             + (f" {dates[0]} → {dates[-1]}" if dates else ""),
+            "reply_like": round(sum(t["replies"] for t in rows) / likes, 3) if likes else None,
+            "bookmark_like": round(sum(t["bookmarks"] for t in rows) / likes, 3) if likes else None,
+            "spike": round(views[int(0.9 * (len(views) - 1))] / max(1, int(statistics.median(views))), 2),
+            "boosted": sum(1 for e, t in zip(eng, rows) if t["views"] > 200_000 and e / t["views"] < 0.0015)})
+    with _db_lock, db() as c:
+        c.execute(f"UPDATE creators SET {', '.join(f'{k}=?' for k in cols)}, baseline_source=?, baseline_at=? WHERE key=?",
+                  (*vals.values(), source if vals["median_views"] is not None else None, now(), key))
+
+
+def add_samples(key, text, price=None):
+    """Paste links to their recent posts (and optionally the price they quoted us) for an account we haven't paid."""
+    handle = key.partition(":")[2]
+    ids = [(m.group(2), m.group(0)) for m in STATUS_RE.finditer(text or "")]
+    ids += [(t, None) for t in re.findall(r"(?<![\d/])\d{15,20}(?![\d])", re.sub(STATUS_RE, " ", text or ""))]
+    with _db_lock, db() as c:
+        if not c.execute("SELECT 1 FROM creators WHERE key=?", (key,)).fetchone():
+            raise ValueError("unknown creator")
+        if price is not None:
+            c.execute("UPDATE creators SET quote_price=? WHERE key=?", (price or None, key))
+        for tid, url in ids:
+            c.execute("INSERT INTO sample_posts(creator_key, tweet_id, url, source) VALUES (?,?,?,'links') ON CONFLICT DO NOTHING",
+                      (key, tid, url or f"https://x.com/{handle}/status/{tid}"))
+    for tid, _ in ids:
+        enqueue(f"s:{key}:{tid}", tid, "sample", key)
+    return {"posts": len(ids)}
+
+
+def sample_counts():
+    with db() as c:
+        return {r[0]: {"n": r[1], "ok": r[2], "bad": r[3]} for r in c.execute(
+            """SELECT creator_key, count(*), sum(error IS NULL AND views > 0), sum(error IS NOT NULL)
+               FROM sample_posts GROUP BY creator_key""")}
 
 
 def creators_view(enqueue_stale=True):
@@ -272,11 +533,13 @@ def creators_view(enqueue_stale=True):
         names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM campaigns")}
         prof = {r["key"]: dict(r) for r in c.execute("SELECT * FROM creators")}
         posts = [dict(r) for r in c.execute(f"SELECT * FROM posts WHERE author IS NOT NULL AND author != '' AND {INCLUDED}")]
+    samples = sample_counts()
     rows, stale = {}, []
     for p in posts:
         k = creator_key(p["platform"], p["author"])
         r = rows.setdefault(k, {"key": k, "platform": p["platform"] or "x", "author": p["author"], "waves": [], "posts": 0,
-                                "paid": 0.0, "views": 0, "eng": 0, "eng_v": 0, "spend_v": 0.0, "post_urls": []})
+                                "paid": 0.0, "views": 0, "eng": 0, "eng_v": 0, "spend_v": 0.0, "likes_v": 0, "replies_v": 0,
+                                "post_urls": []})
         if names.get(p["campaign_id"]) not in r["waves"]:
             r["waves"].append(names.get(p["campaign_id"]))
         e = sum(p[m] for m in METRICS[1:])
@@ -287,24 +550,42 @@ def creators_view(enqueue_stale=True):
         if p["views"]:
             r["eng_v"] += e
             r["spend_v"] += cost(p)
+            r["likes_v"] += p["likes"]
+            r["replies_v"] += p["replies"]
         r["post_urls"].append(p["url"])
+    for k, pr in prof.items():   # added by hand to vet before paying: no posts with us yet
+        if pr.get("prospect") and k not in rows:
+            rows[k] = {"key": k, "platform": pr["platform"] or "x", "author": pr["handle"], "waves": [], "posts": 0,
+                       "paid": 0.0, "views": 0, "eng": 0, "eng_v": 0, "spend_v": 0.0, "likes_v": 0, "replies_v": 0,
+                       "post_urls": []}
     out = []
     for k, r in rows.items():
         pr = prof.get(k, {})
         avg_views = dv(r["views"], r["posts"]) if r["views"] else None   # avg views per paid post
         f = pr.get("followers")
+        er_pct, cpm = r2(dv(r["eng_v"] * 100, r["views"])), r2(dv(r["spend_v"] * 1000, r["views"]))
+        vs_median = r2(dv(avg_views, pr.get("median_views")) if avg_views else None)
+        expected_cpm = r2(dv(pr["quote_price"] * 1000, pr.get("median_views"))) if pr.get("quote_price") else None
+        err = pr.get("error")
+        if err and pr.get("median_views") is not None and err.startswith("median views need"):
+            err = None   # their normal came from pasted posts
         out.append({
             "key": k, "platform": r["platform"], "handle": pr.get("handle") or r["author"], "name": pr.get("name") or r["author"],
             "avatar": pr.get("avatar"), "verified": bool(pr.get("verified")), "followers": f,
             "median_views": pr.get("median_views"), "median_er": pr.get("median_er"), "median_likes": pr.get("median_likes"),
             "sample_size": pr.get("sample_size"), "baseline_source": pr.get("baseline_source"), "baseline_note": pr.get("baseline_note"),
-            "profile_error": pr.get("error"), "profile_at": pr.get("profile_at"),
+            "profile_error": err, "profile_at": pr.get("profile_at"),
+            "quote_price": pr.get("quote_price"), "expected_cpm": expected_cpm, "samples": samples.get(k),
+            "following": pr.get("following"), "posts_count": pr.get("posts_count"), "joined": pr.get("joined"), "bio": pr.get("bio"), "posts_90d": pr.get("posts_90d"),
+            "reply_like": pr.get("reply_like"), "bookmark_like": pr.get("bookmark_like"),
+            "prospect": not r["posts"],
             "waves": r["waves"], "posts": r["posts"], "paid": r["paid"], "views": r["views"], "engagements": r["eng"],
-            "avg_views": r2(avg_views, 0), "er_pct": r2(dv(r["eng_v"] * 100, r["views"])),
-            "cpm": r2(dv(r["spend_v"] * 1000, r["views"])), "cpe": r2(dv(r["paid"], r["eng"]) if r["paid"] else None),
+            "avg_views": r2(avg_views, 0), "er_pct": er_pct,
+            "cpm": cpm, "cpe": r2(dv(r["paid"], r["eng"]) if r["paid"] else None),
             "price_per_1k_followers": r2(dv(dv(r["paid"], r["posts"]) * 1000, f) if r["paid"] and f else None),
             "reach_pct": r2(dv(avg_views * 100, f) if avg_views and f else None),
-            "vs_median": r2(dv(avg_views, pr.get("median_views")) if avg_views else None),
+            "vs_median": vs_median,
+            "quality": creator_quality(pr, er_pct, dv(r["replies_v"], r["likes_v"]), cpm, vs_median, expected_cpm),
             "post_urls": r["post_urls"],
         })
         fresh = pr.get("profile_at") and (datetime.now(timezone.utc) - datetime.fromisoformat(pr["profile_at"])).total_seconds() < CREATOR_TTL_H * 3600
@@ -314,8 +595,72 @@ def creators_view(enqueue_stale=True):
         for k, h in stale:
             enqueue(k, k, "creator", h)
     with _pending_lock:
-        pend = [r["key"] for r in out if r["key"] in _pending]
-    return {"creators": out, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0"))}
+        busy = {p.split(":", 1)[1].rsplit(":", 1)[0] for p in _pending if isinstance(p, str) and p.startswith("s:")}
+        pend = [r["key"] for r in out if r["key"] in _pending or r["key"] in busy or r["key"] in _apify_busy]
+    return {"creators": out, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0")),
+            "apify": apify_client.enabled()}
+
+
+HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
+
+
+def parse_handles(text):
+    """@handles, bare handles or x.com / twitter.com links (profile or post), one per line or comma separated.
+    A chunk with several words (e.g. "Andrej Karpathy @karpathy") only yields its @handles and links."""
+    found, bad = [], []
+    for chunk in re.split(r"[\n,;]+", text or ""):
+        words = [w.strip("<>()[]\"'") for w in chunk.split()]
+        words = [w for w in words if w]
+        if not words:
+            continue
+        picks = [w for w in words if w.startswith("@") or re.search(r"(?:x|twitter)\.com/", w)] if len(words) > 1 else words
+        if not picks:
+            bad.append(chunk.strip())
+        for tok in picks:
+            m = re.search(r"(?:x|twitter)\.com/(?:#!/)?@?([A-Za-z0-9_]+)", tok)
+            h = (m.group(1) if m else tok).lstrip("@")
+            if HANDLE_RE.match(h) and h.lower() not in {"home", "i", "search", "explore", "intent", "share"}:
+                if h.lower() not in {x.lower() for x in found}:
+                    found.append(h)
+            else:
+                bad.append(tok)
+    return found, bad
+
+
+def add_prospects(text):
+    """Add X accounts to vet before paying them: fetch profile + recent posts, then they get a quality verdict."""
+    handles, bad = parse_handles(text)
+    if not handles:
+        raise ValueError("no X handles found — paste @handles or x.com links")
+    added, known = [], []
+    with _db_lock, db() as c:
+        for h in handles:
+            k = creator_key("x", h)
+            if c.execute("SELECT 1 FROM creators WHERE key=?", (k,)).fetchone():
+                c.execute("UPDATE creators SET prospect=1 WHERE key=?", (k,))
+                known.append(h)
+            else:
+                c.execute("INSERT INTO creators(key, platform, handle, prospect, added_at) VALUES (?, 'x', ?, 1, ?)", (k, h, now()))
+                added.append(h)
+    for h in handles:
+        enqueue(creator_key("x", h), creator_key("x", h), "creator", h)
+    posts = 0
+    for h in handles:   # post links in the paste double as their recent posts
+        links = " ".join(m.group(0) for m in STATUS_RE.finditer(text) if m.group(1).lower() == h.lower())
+        if links:
+            posts += add_samples(creator_key("x", h), links)["posts"]
+    return {"added": added, "already_listed": known, "not_handles": bad, "posts": posts}
+
+
+def remove_prospect(key):
+    """Drop an account added by hand. Creators we've paid stay: their rows come from the posts."""
+    with _db_lock, db() as c:
+        if c.execute(f"SELECT 1 FROM posts WHERE lower(author)=lower(?) AND {INCLUDED}", (key.partition(":")[2],)).fetchone():
+            c.execute("UPDATE creators SET prospect=0 WHERE key=?", (key,))
+        else:
+            c.execute("DELETE FROM creators WHERE key=?", (key,))
+            c.execute("DELETE FROM sample_posts WHERE creator_key=?", (key,))
+    return {"removed": key}
 
 
 def set_creator_stats(key, fields, source="manual"):
@@ -883,6 +1228,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, set_creator_stats(b.pop("key"), b, "manual"))
             except (ValueError, KeyError) as e:
                 return self._send(400, {"error": str(e)})
+        if path == "/api/creators/add":
+            try:
+                return self._send(200, add_prospects(json.loads(self._body_bytes() or b"{}").get("text", "")))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/creators/samples":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                price = b.get("price")
+                return self._send(200, add_samples(b.get("key", ""), b.get("text", ""),
+                                                   None if price is None else float(price or 0)))
+            except (ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/creators/remove":
+            return self._send(200, remove_prospect(json.loads(self._body_bytes() or b"{}").get("key", "")))
         if path == "/api/creators/refresh":
             v = creators_view(enqueue_stale=False)
             for r in v["creators"]:

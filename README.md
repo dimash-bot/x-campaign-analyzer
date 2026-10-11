@@ -53,6 +53,7 @@ python3 server.py            # http://localhost:8787 — login is off unless GOO
    | `PUBLIC_URL` | `https://<your-railway-domain>` |
    | `ALLOWED_DOMAIN` | optional, default `nace.ai` |
    | `X_AUTH_TOKEN`, `X_CT0` | optional — only if X blocks guest access from Railway (see below) |
+   | `APIFY_TOKEN` | optional — pulls each creator's last ~20 posts via Apify (`apidojo/tweet-scraper`, ~$0.02/account, at most every 3 days) so Influencers can rate accounts we haven't paid yet without an X login |
 
 6. Bring existing data over: in the **local** app click **Backup** (downloads a consistent snapshot — don't
    copy `campaigns.db` directly, recent edits may still sit in `campaigns.db-wal`), then open the Railway URL,

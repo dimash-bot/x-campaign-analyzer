@@ -150,7 +150,16 @@ class XClient:
         if not u or u.get("__typename") != "User":
             raise ValueError(f"@{handle} not found or suspended")
         leg, core = u.get("legacy", {}), u.get("core", {})
+        try:
+            joined = datetime.strptime(core.get("created_at") or leg.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
+            joined = joined.astimezone(timezone.utc).date().isoformat()
+        except ValueError:
+            joined = None
         return {
+            "joined": joined,
+            "listed": _num(leg.get("listed_count")),
+            "bio": (u.get("profile_bio") or {}).get("description") or leg.get("description") or "",
+            "default_avatar": bool(leg.get("default_profile_image")),
             "user_id": u.get("rest_id"),
             "name": core.get("name") or leg.get("name") or handle,
             "handle": core.get("screen_name") or leg.get("screen_name") or handle,
