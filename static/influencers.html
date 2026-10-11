@@ -161,7 +161,7 @@ button.x:hover { color: var(--bad); background: transparent; }
         <button data-p="paid">Most paid</button>
       </span>
       <span style="flex:1"></span>
-      <button id="refresh" title="Re-fetch followers and recent posts from X">↻ Refresh profiles</button>
+      <button id="refresh" hidden title="Re-fetch followers and recent posts from X (admins only)">↻ Refresh profiles</button>
       <button id="addBtn" class="primary" title="Paste a list of X accounts to check their quality before paying them">+ Add influencers</button>
     </div>
     <div class="table-wrap">
@@ -491,7 +491,7 @@ $("rows").addEventListener("click", async (e) => {
   try { await api("/api/creators/remove", { key: b.dataset.remove }); } finally { load(); }
 });
 $("refresh").onclick = async () => { $("refresh").disabled = true; try { await api("/api/creators/refresh", {}); } finally { $("refresh").disabled = false; load(); } };
-api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
+api("/api/me").then((u) => { $("refresh").hidden = !u.can_refresh; if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
 load();
 </script>
 </body>

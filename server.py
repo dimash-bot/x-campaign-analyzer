@@ -231,6 +231,14 @@ def apply_pack(c, campaign_id, ids, total, note=None):
 
 # ---------------------------------------------------------------- creators (influencers)
 
+REFRESH_ADMINS = {e.strip().lower() for e in os.environ.get("REFRESH_ADMINS", "dimash@nace.ai").split(",") if e.strip()}
+
+
+def can_refresh(user):
+    """Refresh profiles re-runs paid Apify pulls for every creator, so only admins get the button."""
+    return not auth.ENABLED or (user or {}).get("email", "").lower() in REFRESH_ADMINS
+
+
 CREATOR_TTL_H = 24          # refresh profiles / baselines once a day
 APIFY_TTL_H = 72            # re-pull recent posts through Apify at most every 3 days (it costs per post)
 FOLLOWERS_TTL_H = 24 * 14   # re-check their newest followers every 2 weeks
@@ -1271,7 +1279,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/report":
             return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
-            return self._send(200, {"email": user["email"], "name": user.get("name"), "auth": auth.ENABLED})
+            return self._send(200, {"email": user["email"], "name": user.get("name"), "auth": auth.ENABLED,
+                                    "can_refresh": can_refresh(user)})
         if u.path == "/api/state":
             return self._send(200, state(int(q["campaign"][0])))
         if u.path == "/api/export.csv":
@@ -1345,6 +1354,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/creators/remove":
             return self._send(200, remove_prospect(json.loads(self._body_bytes() or b"{}").get("key", "")))
         if path == "/api/creators/refresh":
+            if not can_refresh(user):
+                return self._send(403, {"error": "only admins can refresh all profiles"})
             v = creators_view(enqueue_stale=False)
             for r in v["creators"]:
                 if r["platform"] == "x":
