@@ -120,7 +120,9 @@ def init_db():
                           ("bookmark_like", "REAL"), ("spike", "REAL"), ("boosted", "INTEGER"), ("quote_price", "REAL"),
                           # bot check of their newest followers (Apify sample)
                           ("f_sample", "INTEGER"), ("f_bot", "REAL"), ("f_inactive", "REAL"), ("f_examples", "TEXT"),
-                          ("f_at", "TEXT"), ("f_error", "TEXT")]:
+                          ("f_at", "TEXT"), ("f_error", "TEXT"),
+                          # quality set by hand: overrides the automatic verdict until set back to auto
+                          ("manual_verdict", "TEXT"), ("manual_note", "TEXT"), ("manual_by", "TEXT"), ("manual_at", "TEXT")]:
             add_col("creators", col, decl)
         # Their own recent posts, pasted as links when X won't list the timeline (no login). Read like wave posts.
         c.execute("""CREATE TABLE IF NOT EXISTS sample_posts (
@@ -423,7 +425,31 @@ def creator_quality(pr, er_pct, replies_per_like, cpm, vs_median, expected_cpm=N
         verdict = "partial"
     else:
         verdict = "test" if flags else "good"
-    return {"verdict": verdict, "good": verdict == "good", "kills": kills, "flags": flags}
+    out = {"verdict": verdict, "good": verdict == "good", "kills": kills, "flags": flags}
+    if pr.get("manual_verdict") in VERDICTS:   # set by hand wins; the automatic verdict and reasons stay visible
+        out.update(verdict=pr["manual_verdict"], good=pr["manual_verdict"] == "good", auto_verdict=verdict,
+                   manual={"by": pr.get("manual_by"), "at": pr.get("manual_at"), "note": pr.get("manual_note")})
+    return out
+
+
+VERDICTS = ("good", "test", "bad")
+
+
+def set_manual_verdict(key, verdict, note, email):
+    """Set a creator's quality by hand (good / test / bad), or '' / 'auto' to go back to the automatic verdict."""
+    verdict = (verdict or "").strip().lower()
+    if verdict not in VERDICTS + ("", "auto"):
+        raise ValueError("verdict must be good, test, bad or auto")
+    platform, _, handle = key.partition(":")
+    if not handle:
+        raise ValueError("unknown creator")
+    manual = verdict in VERDICTS
+    with _db_lock, db() as c:
+        c.execute("INSERT INTO creators(key, platform, handle) VALUES (?,?,?) ON CONFLICT(key) DO NOTHING", (key, platform, handle))
+        c.execute("UPDATE creators SET manual_verdict=?, manual_note=?, manual_by=?, manual_at=? WHERE key=?",
+                  (verdict if manual else None, (note or "").strip()[:300] or None if manual else None,
+                   email if manual else None, now() if manual else None, key))
+    return {"key": key, "verdict": verdict if manual else "auto"}
 
 
 def start_apify(key, handle, force=False):
@@ -1348,6 +1374,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/creators/add":
             try:
                 return self._send(200, add_prospects(json.loads(self._body_bytes() or b"{}").get("text", "")))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/creators/verdict":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, set_manual_verdict(b.get("key", ""), b.get("verdict"), b.get("note"), user.get("email")))
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/creators/samples":

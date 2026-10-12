@@ -203,7 +203,7 @@ button.x:hover { color: var(--bad); background: transparent; }
       (ER, replies per like, CPM, views vs their usual). <b>Bot followers</b>: of their 200 newest followers, the share with 3+
       fake-account signals (new account, default avatar, no bio, ≤5 posts, &lt;10 followers, follows 20× more than follow it,
       auto-generated handle). Typical is ~28%; over 40% is a warning, over 50% a hard fail. <b>Bad</b> = any hard fail or 3+ warnings · <b>Test</b> = 1–2 warnings, try small ·
-      <b>Good</b> (green row) = no warnings · <b>Profile only</b> = no post numbers yet (their recent posts need the X login).
+      <b>Good</b> (green row) = no warnings · "by hand" = set with ✎, overriding the checks · <b>Profile only</b> = no post numbers yet (their recent posts need the X login).
       Hover the badge for the full explanation.
     </div>
   </section>
@@ -227,12 +227,22 @@ button.x:hover { color: var(--bad); background: transparent; }
 <div class="overlay" id="chkDlg">
   <form class="modal" id="chkForm" role="dialog" aria-modal="true" aria-labelledby="chkTitle">
     <h3 id="chkTitle">Check account</h3>
+    <label class="muted" for="chkVerdict" style="font-size:12.5px">Quality</label>
+    <select id="chkVerdict" style="width:100%;margin:4px 0 8px">
+      <option value="auto">Auto — from the checks</option>
+      <option value="good">Good (set by hand)</option>
+      <option value="test">Test (set by hand)</option>
+      <option value="bad">Bad (set by hand)</option>
+    </select>
+    <input id="chkNote" type="text" maxlength="300" placeholder="Why? e.g. great results in wave 2, known real audience" style="width:100%;margin:0 0 12px">
+    <div id="chkXOnly">
     <p>Not paid yet? We judge them the same way as a paid post: their own recent posts give ER and replies per like, and their quote ÷
       their median views gives the CPM we'd pay.</p>
     <label class="muted" for="chkPrice" style="font-size:12.5px">Price they quoted for one post ($)</label>
     <input id="chkPrice" type="number" min="0" step="1" placeholder="e.g. 250" style="width:100%;margin:4px 0 10px">
     <label class="muted" for="chkLinks" style="font-size:12.5px">Links to their recent posts (optional — only needed without Apify / X login)</label>
     <textarea id="chkLinks" placeholder="https://x.com/handle/status/…&#10;https://x.com/handle/status/…"></textarea>
+    </div>
     <div class="row">
       <span class="msg" id="chkMsg"></span>
       <button type="button" id="chkCancel">Cancel</button>
@@ -328,7 +338,7 @@ function render() {
     const q = c.quality || { verdict: "partial", kills: [], flags: [] }, good = q.verdict === "good";
     const pend = D.pending.includes(c.key);
     const reasons = [...q.kills.map((r) => "✕ " + r), ...q.flags.map((r) => "! " + r)];
-    const why = q.kills[0] || q.flags[0] || "";
+    const why = q.manual ? (q.manual.note || `set by hand (auto: ${q.auto_verdict})`) : q.kills[0] || q.flags[0] || "";
     return `<tr class="${good ? "goodrow" : ""}${picked.has(c.key) ? " picked" : ""}">
       <td class="rank l"><label class="pick"><input type="checkbox" data-pick="${esc(c.key)}" ${picked.has(c.key) ? "checked" : ""}>${i + 1}</label></td>
       <td class="l"><div class="who">
@@ -337,8 +347,8 @@ function render() {
           <small>${c.platform === "x" ? "@" + esc(c.handle) + " · " : ""}${c.prospect ? `<span class="prospectchip">not paid yet</span>` : c.waves.map((w) => `<span class="wavechip">${esc(w)}</span>`).join("")}</small></div>
       </div></td>
       <td class="l">${pend ? `<span class="fetching">analyzing…</span>`
-        : `<span class="pill ${q.verdict}" tabindex="0" data-tip="${esc(c.key)}">${{ good: "Good", test: "Test", bad: "Bad", partial: "Profile only" }[q.verdict]}${reasons.length ? ` · ${reasons.length}` : ""}</span>`
-          + (c.platform === "x" ? `<button class="x" title="Quoted price / their post links" data-check="${esc(c.key)}">✎</button>` : "")
+        : `<span class="pill ${q.verdict}" tabindex="0" data-tip="${esc(c.key)}">${{ good: "Good", test: "Test", bad: "Bad", partial: "Profile only" }[q.verdict]}${q.manual ? " · by hand" : reasons.length ? ` · ${reasons.length}` : ""}</span>`
+          + `<button class="x" title="Set quality by hand${c.platform === "x" ? " / quoted price / their post links" : ""}" data-check="${esc(c.key)}">✎</button>`
           + (why ? `<span class="why" data-tip="${esc(c.key)}">${esc(why)}</span>` : "")}</td>
       <td data-tip="${esc(c.key)}" class="${c.bot_followers_pct > 50 ? "bad" : c.bot_followers_pct > 40 ? "warn" : ""}">${ok(c.bot_followers_pct) ? c.bot_followers_pct.toFixed(0) + "%" : c.followers_error ? `<span class="err" title="${esc(c.followers_error)}">—</span>` : "—"}</td>
       ${cell(c, "followers", fmtN, "colsep")}
@@ -433,7 +443,13 @@ const VERDICT = {
 };
 function tipHtml(c) {
   const q = c.quality || { verdict: "partial", kills: [], flags: [] };
-  const [title, rule] = VERDICT[q.verdict];
+  let [title, rule] = VERDICT[q.verdict];
+  if (q.manual) {
+    title = { good: "Good", test: "Test", bad: "Bad" }[q.verdict] + " — set by hand";
+    rule = `Set by ${esc(q.manual.by || "someone")}${q.manual.at ? " on " + q.manual.at.slice(0, 10) : ""}. `
+      + `The checks alone say <b>${{ good: "Good", test: "Test", bad: "Bad", partial: "Profile only" }[q.auto_verdict]}</b>. Change it with ✎.`
+      + (q.manual.note ? `<br>“${esc(q.manual.note)}”` : "");
+  }
   const li = (cls, arr) => arr.map((r) => `<li class="${cls}">${esc(r)}</li>`).join("");
   const days = c.joined ? Math.max(1, Math.round((Date.now() - new Date(c.joined)) / 864e5)) : null;
   const nums = [
@@ -448,9 +464,10 @@ function tipHtml(c) {
     ["Our post", ok(c.er_pct) ? `ER ${pct(c.er_pct)} · CPM ${fmt$(c.cpm)}` + (ok(c.vs_median) ? ` · ${c.vs_median.toFixed(2)}× their usual` : "") : null],
   ].filter(([, v]) => v != null);
   return `<h4 class="${q.verdict}">${title}</h4><p class="rule">${rule}</p>`
+    + (q.manual && (q.kills.length || q.flags.length) ? `<div class="sec" style="margin-top:10px">What the automatic checks found</div>` : "")
     + (q.kills.length ? `<div class="sec">Hard fails</div><ul>${li("kill", q.kills)}</ul>` : "")
     + (q.flags.length ? `<div class="sec">Warnings</div><ul>${li("flag", q.flags)}</ul>` : "")
-    + (q.verdict === "good" ? `<div class="sec">Passed</div><ul>${li("ok", [
+    + (q.verdict === "good" && !q.manual ? `<div class="sec">Passed</div><ul>${li("ok", [
         ...(c.joined ? ["Profile: normal follow ratio, growth for its age and posting rate"] : []),
         ...(ok(c.median_views) ? ["Their posts: reach enough of their followers, no paid-boost pattern",
           "Their posts: engagement and replies per like in the healthy range"] : []),
@@ -488,10 +505,13 @@ $("rows").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-check]"); if (!b) return;
   const c = D.creators.find((x) => x.key === b.dataset.check); if (!c) return;
   chkKey = c.key;
-  $("chkTitle").textContent = `Check @${c.handle}`;
+  $("chkTitle").textContent = `Check ${c.platform === "x" ? "@" : ""}${c.handle}`;
+  $("chkVerdict").value = c.quality?.manual ? c.quality.verdict : "auto";
+  $("chkNote").value = c.quality?.manual?.note || "";
+  $("chkXOnly").hidden = c.platform !== "x";
   $("chkPrice").value = c.quote_price ?? "";
   $("chkLinks").value = ""; $("chkMsg").textContent = "";
-  chkDlg.classList.add("open"); $("chkPrice").focus();
+  chkDlg.classList.add("open"); $("chkVerdict").focus();
 });
 $("chkCancel").onclick = () => chkDlg.classList.remove("open");
 chkDlg.addEventListener("click", (e) => { if (e.target === chkDlg) chkDlg.classList.remove("open"); });
@@ -499,7 +519,8 @@ $("chkForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("chkOk").disabled = true;
   try {
-    const r = await api("/api/creators/samples", { key: chkKey, text: $("chkLinks").value,
+    await api("/api/creators/verdict", { key: chkKey, verdict: $("chkVerdict").value, note: $("chkNote").value });
+    const r = $("chkXOnly").hidden ? {} : await api("/api/creators/samples", { key: chkKey, text: $("chkLinks").value,
       price: $("chkPrice").value === "" ? 0 : Number($("chkPrice").value) });
     $("chkMsg").textContent = r.posts ? `reading ${r.posts} post(s)…` : "saved";
     load();
