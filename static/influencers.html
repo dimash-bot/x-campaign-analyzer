@@ -160,6 +160,7 @@ button.x:hover { color: var(--bad); background: transparent; }
       <select id="plat"><option value="">All platforms</option><option value="x">X</option><option value="linkedin">LinkedIn</option><option value="other">Other</option></select>
       <select id="out" title="Have we texted / DMed them?"><option value="">Outreach: all</option><option value="yes">Outreached</option><option value="no">Not outreached yet</option></select>
       <span class="row chips" id="chips">
+        <button data-p="added_at">Newest added</button>
         <button data-p="followers">Most followers</button>
         <button data-p="vs_median">Beat their median</button>
         <button data-p="reach_pct">Best reach</button>
@@ -180,6 +181,7 @@ button.x:hover { color: var(--bad); background: transparent; }
           <th class="l"><label class="pick" title="Select all shown"><input type="checkbox" id="selAll">#</label></th>
           <th class="l" data-sort="name">Creator</th>
           <th class="l" data-sort="outreached" title="Tick once we've texted / DMed them">Outreached</th>
+          <th class="l" data-sort="added_at" title="When they joined our list: added by hand to vet, or their first post for us">Added</th>
           <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
           <th data-sort="bot_followers_pct" title="Share of their 200 newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
           <th data-sort="followers" class="colsep"><span class="grp">Profile</span>Followers</th>
@@ -271,8 +273,9 @@ const PLAT = { x: "X", linkedin: "LinkedIn", other: "Other" };
 let D = { creators: [], pending: [], x_login: false }, timer = null, waveWanted = null;
 const picked = new Set();   // creator keys ticked for deletion
 
-let sort = { key: "paid", dir: "desc" };
-try { sort = JSON.parse(localStorage.getItem("xca_csort")) || sort; } catch (e) {}
+// Default: newest added first. (New storage key so everyone starts from the new default once.)
+let sort = { key: "added_at", dir: "desc" };
+try { sort = JSON.parse(localStorage.getItem("xca_csort2")) || sort; } catch (e) {}
 if (sort.key === "avg_views") sort.key = "views";   // column now shows total views with us
 const LOW_FIRST = new Set(["name", "cpm", "cpe", "price_per_1k_followers"]);
 
@@ -355,6 +358,7 @@ function render() {
           <small>${c.platform === "x" ? "@" + esc(c.handle) + " · " : ""}${c.prospect ? `<span class="prospectchip">not paid yet</span>` : c.waves.map((w) => `<span class="wavechip">${esc(w)}</span>`).join("")}</small></div>
       </div></td>
       <td class="l"><label class="out${c.outreached ? " on" : ""}" title="${c.outreached ? `Outreached by ${esc(c.outreached_by || "?")} on ${c.outreached_at ? new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "?"} — untick to clear` : "Tick once we've texted / DMed them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<small>${esc((c.outreached_by || "").split("@")[0])}${c.outreached_at ? " · " + new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}</small>` : ""}</label></td>
+      <td class="l muted" title="${c.added_at ? new Date(c.added_at).toLocaleString() : ""}">${c.added_at ? new Date(c.added_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</td>
       <td class="l">${pend ? `<span class="fetching">analyzing…</span>`
         : `<span class="pill ${q.verdict}" tabindex="0" data-tip="${esc(c.key)}">${{ good: "Good", test: "Test", bad: "Bad", partial: "Profile only" }[q.verdict]}${q.manual ? " · by hand" : reasons.length ? ` · ${reasons.length}` : ""}</span>`
           + `<button class="x" title="Set quality by hand${c.platform === "x" ? " / quoted price / their post links" : ""}" data-check="${esc(c.key)}">✎</button>`
@@ -373,7 +377,7 @@ function render() {
       <td>${fmt$(c.cpe)}</td>
       <td>${fmt$(c.price_per_1k_followers)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="17" class="empty">No influencers match.</td></tr>`;
+  }).join("") : `<tr><td colspan="18" class="empty">No influencers match.</td></tr>`;
   syncPicked();
 }
 
@@ -392,13 +396,13 @@ $("head").addEventListener("click", (e) => {
   const th = e.target.closest("th[data-sort]"); if (!th) return;
   const k = th.dataset.sort;
   sort = { key: k, dir: sort.key === k ? (sort.dir === "asc" ? "desc" : "asc") : LOW_FIRST.has(k) ? "asc" : "desc" };
-  try { localStorage.setItem("xca_csort", JSON.stringify(sort)); } catch (err) {}
+  try { localStorage.setItem("xca_csort2", JSON.stringify(sort)); } catch (err) {}
   render();
 });
 $("chips").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]"); if (!b) return;
   sort = { key: b.dataset.p, dir: LOW_FIRST.has(b.dataset.p) ? "asc" : "desc" };
-  try { localStorage.setItem("xca_csort", JSON.stringify(sort)); } catch (err) {}
+  try { localStorage.setItem("xca_csort2", JSON.stringify(sort)); } catch (err) {}
   render();
 });
 ["q", "wave", "plat", "out"].forEach((id) => $(id).addEventListener("input", render));

@@ -686,7 +686,9 @@ def creators_view(enqueue_stale=True):
         k = creator_key(p["platform"], p["author"])
         r = rows.setdefault(k, {"key": k, "platform": p["platform"] or "x", "author": p["author"], "waves": [], "posts": 0,
                                 "paid": 0.0, "views": 0, "eng": 0, "eng_v": 0, "spend_v": 0.0, "likes_v": 0, "replies_v": 0,
-                                "post_urls": []})
+                                "post_urls": [], "first_post": None})
+        if p.get("created_at") and (not r["first_post"] or p["created_at"] < r["first_post"]):
+            r["first_post"] = p["created_at"]
         if names.get(p["campaign_id"]) not in r["waves"]:
             r["waves"].append(names.get(p["campaign_id"]))
         e = sum(p[m] for m in METRICS[1:])
@@ -728,6 +730,8 @@ def creators_view(enqueue_stale=True):
             "followers_checked_at": pr.get("f_at"), "followers_error": pr.get("f_error"),
             "following": pr.get("following"), "posts_count": pr.get("posts_count"), "joined": pr.get("joined"), "bio": pr.get("bio"), "posts_90d": pr.get("posts_90d"),
             "reply_like": pr.get("reply_like"), "bookmark_like": pr.get("bookmark_like"),
+            # when they joined our list: added by hand to vet, else their first post for us
+            "added_at": pr.get("added_at") or r.get("first_post"),
             "outreached": bool(pr.get("outreached")), "outreached_by": pr.get("outreached_by"), "outreached_at": pr.get("outreached_at"),
             "prospect": not r["posts"],
             "waves": r["waves"], "posts": r["posts"], "paid": r["paid"], "views": r["views"], "engagements": r["eng"],
