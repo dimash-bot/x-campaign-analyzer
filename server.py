@@ -122,7 +122,9 @@ def init_db():
                           ("f_sample", "INTEGER"), ("f_bot", "REAL"), ("f_inactive", "REAL"), ("f_examples", "TEXT"),
                           ("f_at", "TEXT"), ("f_error", "TEXT"),
                           # quality set by hand: overrides the automatic verdict until set back to auto
-                          ("manual_verdict", "TEXT"), ("manual_note", "TEXT"), ("manual_by", "TEXT"), ("manual_at", "TEXT")]:
+                          ("manual_verdict", "TEXT"), ("manual_note", "TEXT"), ("manual_by", "TEXT"), ("manual_at", "TEXT"),
+                          # outreach: we've texted / DMed this creator (who ticked it and when)
+                          ("outreached", "INTEGER DEFAULT 0"), ("outreached_by", "TEXT"), ("outreached_at", "TEXT")]:
             add_col("creators", col, decl)
         # Their own recent posts, pasted as links when X won't list the timeline (no login). Read like wave posts.
         c.execute("""CREATE TABLE IF NOT EXISTS sample_posts (
@@ -452,6 +454,20 @@ def set_manual_verdict(key, verdict, note, email):
     return {"key": key, "verdict": verdict if manual else "auto"}
 
 
+def set_outreached(keys, on, email):
+    """Tick / untick 'outreached' (we've texted them) for one or more creators; remembers who and when."""
+    keys = [k for k in keys if isinstance(k, str) and ":" in k]
+    if not keys:
+        raise ValueError("no creators given")
+    with _db_lock, db() as c:
+        for k in keys:
+            platform, _, handle = k.partition(":")
+            c.execute("INSERT INTO creators(key, platform, handle) VALUES (?,?,?) ON CONFLICT(key) DO NOTHING", (k, platform, handle))
+            c.execute("UPDATE creators SET outreached=?, outreached_by=?, outreached_at=? WHERE key=?",
+                      (1 if on else 0, email if on else None, now() if on else None, k))
+    return {"updated": len(keys), "outreached": bool(on)}
+
+
 def start_apify(key, handle, force=False):
     """Pull their last posts through Apify in the background, unless we did recently."""
     with db() as c:
@@ -712,6 +728,7 @@ def creators_view(enqueue_stale=True):
             "followers_checked_at": pr.get("f_at"), "followers_error": pr.get("f_error"),
             "following": pr.get("following"), "posts_count": pr.get("posts_count"), "joined": pr.get("joined"), "bio": pr.get("bio"), "posts_90d": pr.get("posts_90d"),
             "reply_like": pr.get("reply_like"), "bookmark_like": pr.get("bookmark_like"),
+            "outreached": bool(pr.get("outreached")), "outreached_by": pr.get("outreached_by"), "outreached_at": pr.get("outreached_at"),
             "prospect": not r["posts"],
             "waves": r["waves"], "posts": r["posts"], "paid": r["paid"], "views": r["views"], "engagements": r["eng"],
             "avg_views": r2(avg_views, 0), "er_pct": er_pct,
@@ -1389,6 +1406,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, add_samples(b.get("key", ""), b.get("text", ""),
                                                    None if price is None else float(price or 0)))
             except (ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/creators/outreach":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, set_outreached(b.get("keys") or [b.get("key")], bool(b.get("outreached")), user.get("email")))
+            except ValueError as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/creators/remove":
             b = json.loads(self._body_bytes() or b"{}")

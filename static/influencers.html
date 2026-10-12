@@ -57,6 +57,9 @@ th.sorted { color: var(--accent); }
 th.sorted::after { content: " ↓"; }
 th.sorted.asc::after { content: " ↑"; }
 th .grp { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); opacity: .8; }
+label.out { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+label.out small { color: var(--muted); font-size: 11.5px; }
+label.out.on small { color: var(--good); }
 td.rank { color: var(--muted); font-size: 12px; width: 1%; }
 .who { display: flex; gap: 10px; align-items: center; min-width: 210px; }
 .who img, .who .ph { width: 32px; height: 32px; border-radius: 50%; flex: none; background: var(--surface-2); border: 1px solid var(--border); object-fit: cover; }
@@ -155,6 +158,7 @@ button.x:hover { color: var(--bad); background: transparent; }
       <input id="q" type="search" placeholder="Search name or @handle" style="min-width:200px">
       <select id="wave"><option value="">All waves</option></select>
       <select id="plat"><option value="">All platforms</option><option value="x">X</option><option value="linkedin">LinkedIn</option><option value="other">Other</option></select>
+      <select id="out" title="Have we texted / DMed them?"><option value="">Outreach: all</option><option value="yes">Outreached</option><option value="no">Not outreached yet</option></select>
       <span class="row chips" id="chips">
         <button data-p="followers">Most followers</button>
         <button data-p="vs_median">Beat their median</button>
@@ -166,6 +170,7 @@ button.x:hover { color: var(--bad); background: transparent; }
       </span>
       <span style="flex:1"></span>
       <button id="refresh" hidden title="Re-fetch followers and recent posts from X (admins only)">↻ Refresh profiles</button>
+      <button id="outSel" hidden title="Tick 'Outreached' for every selected creator">Mark outreached</button>
       <button id="delSel" class="danger" hidden>Delete selected</button>
       <button id="addBtn" class="primary" title="Paste a list of X accounts to check their quality before paying them">+ Add influencers</button>
     </div>
@@ -174,6 +179,7 @@ button.x:hover { color: var(--bad); background: transparent; }
         <thead id="head"><tr>
           <th class="l"><label class="pick" title="Select all shown"><input type="checkbox" id="selAll">#</label></th>
           <th class="l" data-sort="name">Creator</th>
+          <th class="l" data-sort="outreached" title="Tick once we've texted / DMed them">Outreached</th>
           <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
           <th data-sort="bot_followers_pct" title="Share of their 200 newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
           <th data-sort="followers" class="colsep"><span class="grp">Profile</span>Followers</th>
@@ -278,8 +284,9 @@ async function api(path, body) {
 }
 
 function visible() {
-  const q = $("q").value.trim().toLowerCase(), w = $("wave").value, p = $("plat").value;
-  return D.creators.filter((c) => (!q || `${c.name} ${c.handle}`.toLowerCase().includes(q)) && (!w || (w === "__prospect" ? c.prospect : c.waves.includes(w))) && (!p || c.platform === p));
+  const q = $("q").value.trim().toLowerCase(), w = $("wave").value, p = $("plat").value, o = $("out").value;
+  return D.creators.filter((c) => (!q || `${c.name} ${c.handle}`.toLowerCase().includes(q)) && (!w || (w === "__prospect" ? c.prospect : c.waves.includes(w))) && (!p || c.platform === p)
+    && (!o || (o === "yes") === !!c.outreached));
 }
 
 function sorted(list) {
@@ -314,6 +321,7 @@ function render() {
   const withMed = V.filter((c) => ok(c.vs_median));
   $("kpis").innerHTML = [
     k("Influencers", V.length.toLocaleString(), `${V.filter((c) => c.waves.length > 1).length} used in more than one wave`),
+    k("Outreached", `${V.filter((c) => c.outreached).length} / ${V.length}`, `${V.filter((c) => !c.outreached).length} not texted yet`),
     k("Good / test / bad", ["good", "test", "bad"].map((v) => V.filter((c) => c.quality?.verdict === v).length).join(" / "),
       `${V.filter((c) => c.quality?.verdict === "partial").length} profile-only (need post numbers)`),
     k("Combined followers", fmtN(V.reduce((s, c) => s + (c.followers || 0), 0)), `median ${fmtN(med(V.map((c) => c.followers)))} each`),
@@ -346,6 +354,7 @@ function render() {
         <div><a href="${esc(link)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.verified ? ` <span title="Verified" class="muted">✓</span>` : ""}<span class="badge">${PLAT[c.platform]}</span>${note}${c.prospect ? `<button class="x" title="Remove from the list" data-remove="${esc(c.key)}">✕</button>` : ""}
           <small>${c.platform === "x" ? "@" + esc(c.handle) + " · " : ""}${c.prospect ? `<span class="prospectchip">not paid yet</span>` : c.waves.map((w) => `<span class="wavechip">${esc(w)}</span>`).join("")}</small></div>
       </div></td>
+      <td class="l"><label class="out${c.outreached ? " on" : ""}" title="${c.outreached ? `Outreached by ${esc(c.outreached_by || "?")} on ${c.outreached_at ? new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "?"} — untick to clear` : "Tick once we've texted / DMed them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<small>${esc((c.outreached_by || "").split("@")[0])}${c.outreached_at ? " · " + new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}</small>` : ""}</label></td>
       <td class="l">${pend ? `<span class="fetching">analyzing…</span>`
         : `<span class="pill ${q.verdict}" tabindex="0" data-tip="${esc(c.key)}">${{ good: "Good", test: "Test", bad: "Bad", partial: "Profile only" }[q.verdict]}${q.manual ? " · by hand" : reasons.length ? ` · ${reasons.length}` : ""}</span>`
           + `<button class="x" title="Set quality by hand${c.platform === "x" ? " / quoted price / their post links" : ""}" data-check="${esc(c.key)}">✎</button>`
@@ -364,7 +373,7 @@ function render() {
       <td>${fmt$(c.cpe)}</td>
       <td>${fmt$(c.price_per_1k_followers)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="16" class="empty">No influencers match.</td></tr>`;
+  }).join("") : `<tr><td colspan="17" class="empty">No influencers match.</td></tr>`;
   syncPicked();
 }
 
@@ -392,7 +401,17 @@ $("chips").addEventListener("click", (e) => {
   try { localStorage.setItem("xca_csort", JSON.stringify(sort)); } catch (err) {}
   render();
 });
-["q", "wave", "plat"].forEach((id) => $(id).addEventListener("input", render));
+["q", "wave", "plat", "out"].forEach((id) => $(id).addEventListener("input", render));
+// Outreach tick box: saved right away, remembers who ticked it and when
+$("rows").addEventListener("change", async (e) => {
+  const cb = e.target.closest("input[data-out]"); if (!cb) return;
+  const c = D.creators.find((x) => x.key === cb.dataset.out);
+  try {
+    await api("/api/creators/outreach", { key: cb.dataset.out, outreached: cb.checked });
+    if (c) { c.outreached = cb.checked; }
+    cb.blur(); load();
+  } catch (err) { cb.checked = !cb.checked; cb.closest("label").title = "Couldn't save: " + err.message; }
+});
 $("rows").addEventListener("change", async (e) => {
   const el = e.target; if (!el.dataset.key || el.value === "") return;
   try { await api("/api/creators/update", { key: el.dataset.key, [el.dataset.f]: Number(el.value) }); el.blur(); load(); } catch (err) { el.style.borderColor = "var(--bad)"; el.title = "Couldn't save: " + err.message; }
@@ -404,6 +423,8 @@ function syncPicked() {
   $("selAll").checked = shown.length > 0 && shown.every((c) => picked.has(c.key));
   $("selAll").indeterminate = !$("selAll").checked && shown.some((c) => picked.has(c.key));
   $("delSel").hidden = !picked.size;
+  $("outSel").hidden = !picked.size;
+  $("outSel").textContent = `Mark ${picked.size} outreached`;
   $("delSel").textContent = `Delete ${picked.size} selected`;
 }
 $("rows").addEventListener("change", (e) => {
@@ -416,6 +437,11 @@ $("selAll").addEventListener("change", (e) => {
   for (const c of visible()) e.target.checked ? picked.add(c.key) : picked.delete(c.key);
   render();
 });
+$("outSel").onclick = async () => {
+  const keys = [...picked];
+  try { await api("/api/creators/outreach", { keys, outreached: true }); picked.clear(); load(); }
+  catch (err) { $("outSel").title = "Couldn't save: " + err.message; }
+};
 $("delSel").onclick = async () => {
   const sel = D.creators.filter((c) => picked.has(c.key));
   const paid = sel.filter((c) => c.posts);

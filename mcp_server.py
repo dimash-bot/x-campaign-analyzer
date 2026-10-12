@@ -114,6 +114,13 @@ TOOLS = [
                     "posts excluded), and how our paid posts did: avg views, vs_median (×), reach %, ER, CPM, CPE, "
                     "$ per 1K followers. Optional filter by wave.",
      "inputSchema": {"type": "object", "properties": {"campaign": _campaign_arg("Optional: only creators in this wave")}}},
+    {"name": "set_outreached",
+     "description": "Mark influencers as outreached (we've texted/DMed them) or not. Identify each by X handle or, for "
+                    "LinkedIn, their name. Shows as the Outreached tick box on the Influencers page.",
+     "inputSchema": {"type": "object", "required": ["creators"], "properties": {
+         "creators": {"type": "array", "items": {"type": "string"}, "description": "X handles (e.g. dravenip) or LinkedIn names"},
+         "outreached": {"type": "boolean", "description": "true = we've reached out (default), false = clear the tick"},
+         "platform": {"type": "string", "enum": ["x", "linkedin", "other"], "description": "default x"}}}},
     {"name": "set_creator_stats",
      "description": "Save an influencer's profile/baseline numbers that couldn't be fetched (LinkedIn followers, or median "
                     "views/ER when X needs a login). Identify the creator by X handle or, for LinkedIn, their name.",
@@ -174,6 +181,10 @@ def call_tool(app, user, name, args):
             r.pop("avatar", None)
         return {"creators": v["creators"], "x_login_configured": v["x_login"],
                 "note": "vs_median = avg views of our paid post / their median views. Missing medians can be filled with set_creator_stats."}
+    if name == "set_outreached":
+        keys = [app.creator_key(args.get("platform") or "x", str(h).lstrip("@")) for h in args.get("creators") or []]
+        email = user if isinstance(user, str) else (user or {}).get("email")
+        return app.set_outreached(keys, args.get("outreached", True), email)
     if name == "set_creator_stats":
         key = app.creator_key(args.get("platform") or "x", str(args["creator"]).lstrip("@"))
         fields = {k: args.get(k) for k in ("followers", "median_views", "median_likes", "median_er", "sample_size")}
