@@ -761,15 +761,22 @@ def add_prospects(text):
     return {"added": added, "already_listed": known, "not_handles": bad, "posts": posts}
 
 
-def remove_prospect(key):
-    """Drop an account added by hand. Creators we've paid stay: their rows come from the posts."""
+def delete_creators(keys):
+    """Delete creators for good: their profile, pasted/Apify posts and, for creators we paid, their posts in every
+    wave (so those waves' spend and views drop). Days and signups are untouched."""
+    out = {"creators": 0, "posts": 0, "spend": 0.0}
     with _db_lock, db() as c:
-        if c.execute(f"SELECT 1 FROM posts WHERE lower(author)=lower(?) AND {INCLUDED}", (key.partition(":")[2],)).fetchone():
-            c.execute("UPDATE creators SET prospect=0 WHERE key=?", (key,))
-        else:
+        for key in keys:
+            platform, _, handle = key.partition(":")
+            where = "lower(author)=lower(?) AND COALESCE(platform,'x')=?"
+            row = c.execute(f"SELECT count(*), COALESCE(sum(budget),0) FROM posts WHERE {where}", (handle, platform or "x")).fetchone()
+            c.execute(f"DELETE FROM posts WHERE {where}", (handle, platform or "x"))
             c.execute("DELETE FROM creators WHERE key=?", (key,))
             c.execute("DELETE FROM sample_posts WHERE creator_key=?", (key,))
-    return {"removed": key}
+            out["creators"] += 1
+            out["posts"] += row[0]
+            out["spend"] += row[1]
+    return out
 
 
 def set_creator_stats(key, fields, source="manual"):
@@ -1352,7 +1359,11 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/creators/remove":
-            return self._send(200, remove_prospect(json.loads(self._body_bytes() or b"{}").get("key", "")))
+            b = json.loads(self._body_bytes() or b"{}")
+            keys = [k for k in (b.get("keys") or [b.get("key")]) if isinstance(k, str) and ":" in k]
+            if not keys:
+                return self._send(400, {"error": "no creators given"})
+            return self._send(200, delete_creators(keys))
         if path == "/api/creators/refresh":
             if not can_refresh(user):
                 return self._send(403, {"error": "only admins can refresh all profiles"})

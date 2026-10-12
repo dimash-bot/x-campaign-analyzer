@@ -86,6 +86,10 @@ td input { width: 90px; text-align: right; padding: 3px 6px; }
 .empty { color: var(--muted); padding: 20px 0; text-align: left; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 button.primary:hover { filter: brightness(1.08); }
+label.pick { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+tr.picked td { background: var(--surface-2); }
+button.danger { color: var(--bad); border-color: currentColor; font-weight: 600; }
+button.danger:hover { background: color-mix(in srgb, var(--bad) 10%, var(--surface)); }
 button.x { border-color: transparent; background: transparent; color: var(--muted); padding: 0 4px; margin-left: 2px; }
 button.x:hover { color: var(--bad); background: transparent; }
 .pill { display: inline-block; font-size: 11.5px; font-weight: 650; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; cursor: help; }
@@ -162,12 +166,13 @@ button.x:hover { color: var(--bad); background: transparent; }
       </span>
       <span style="flex:1"></span>
       <button id="refresh" hidden title="Re-fetch followers and recent posts from X (admins only)">↻ Refresh profiles</button>
+      <button id="delSel" class="danger" hidden>Delete selected</button>
       <button id="addBtn" class="primary" title="Paste a list of X accounts to check their quality before paying them">+ Add influencers</button>
     </div>
     <div class="table-wrap">
       <table>
         <thead id="head"><tr>
-          <th class="l">#</th>
+          <th class="l"><label class="pick" title="Select all shown"><input type="checkbox" id="selAll">#</label></th>
           <th class="l" data-sort="name">Creator</th>
           <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
           <th data-sort="bot_followers_pct" title="Share of their 200 newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
@@ -248,6 +253,7 @@ const pct = (n, d = 2) => !ok(n) ? "—" : n.toFixed(d) + "%";
 const med = (a) => { const v = a.filter(ok).sort((x, y) => x - y); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null; };
 const PLAT = { x: "X", linkedin: "LinkedIn", other: "Other" };
 let D = { creators: [], pending: [], x_login: false }, timer = null, waveWanted = null;
+const picked = new Set();   // creator keys ticked for deletion
 
 let sort = { key: "paid", dir: "desc" };
 try { sort = JSON.parse(localStorage.getItem("xca_csort")) || sort; } catch (e) {}
@@ -323,8 +329,8 @@ function render() {
     const pend = D.pending.includes(c.key);
     const reasons = [...q.kills.map((r) => "✕ " + r), ...q.flags.map((r) => "! " + r)];
     const why = q.kills[0] || q.flags[0] || "";
-    return `<tr class="${good ? "goodrow" : ""}">
-      <td class="rank l">${i + 1}</td>
+    return `<tr class="${good ? "goodrow" : ""}${picked.has(c.key) ? " picked" : ""}">
+      <td class="rank l"><label class="pick"><input type="checkbox" data-pick="${esc(c.key)}" ${picked.has(c.key) ? "checked" : ""}>${i + 1}</label></td>
       <td class="l"><div class="who">
         ${c.avatar ? `<img src="${esc(c.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="ph">${esc(initials)}</span>`}
         <div><a href="${esc(link)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.verified ? ` <span title="Verified" class="muted">✓</span>` : ""}<span class="badge">${PLAT[c.platform]}</span>${note}${c.prospect ? `<button class="x" title="Remove from the list" data-remove="${esc(c.key)}">✕</button>` : ""}
@@ -349,6 +355,7 @@ function render() {
       <td>${fmt$(c.price_per_1k_followers)}</td>
     </tr>`;
   }).join("") : `<tr><td colspan="16" class="empty">No influencers match.</td></tr>`;
+  syncPicked();
 }
 
 const editing = () => document.activeElement?.tagName === "INPUT" && document.activeElement.closest("#rows");
@@ -380,6 +387,43 @@ $("rows").addEventListener("change", async (e) => {
   const el = e.target; if (!el.dataset.key || el.value === "") return;
   try { await api("/api/creators/update", { key: el.dataset.key, [el.dataset.f]: Number(el.value) }); el.blur(); load(); } catch (err) { el.style.borderColor = "var(--bad)"; el.title = "Couldn't save: " + err.message; }
 });
+// Tick creators, delete them for good
+function syncPicked() {
+  for (const k of [...picked]) if (!D.creators.some((c) => c.key === k)) picked.delete(k);
+  const shown = visible();
+  $("selAll").checked = shown.length > 0 && shown.every((c) => picked.has(c.key));
+  $("selAll").indeterminate = !$("selAll").checked && shown.some((c) => picked.has(c.key));
+  $("delSel").hidden = !picked.size;
+  $("delSel").textContent = `Delete ${picked.size} selected`;
+}
+$("rows").addEventListener("change", (e) => {
+  const cb = e.target.closest("input[data-pick]"); if (!cb) return;
+  cb.checked ? picked.add(cb.dataset.pick) : picked.delete(cb.dataset.pick);
+  cb.closest("tr").classList.toggle("picked", cb.checked);
+  syncPicked();
+});
+$("selAll").addEventListener("change", (e) => {
+  for (const c of visible()) e.target.checked ? picked.add(c.key) : picked.delete(c.key);
+  render();
+});
+$("delSel").onclick = async () => {
+  const sel = D.creators.filter((c) => picked.has(c.key));
+  const paid = sel.filter((c) => c.posts);
+  const posts = paid.reduce((n, c) => n + c.posts, 0), spend = paid.reduce((n, c) => n + c.paid, 0);
+  const names = sel.slice(0, 8).map((c) => (c.platform === "x" ? "@" : "") + c.handle).join(", ") + (sel.length > 8 ? ` +${sel.length - 8} more` : "");
+  const msg = `Delete ${sel.length} creator${sel.length === 1 ? "" : "s"} for good?\n${names}`
+    + (paid.length ? `\n\n${paid.length} of them were paid: this also deletes their ${posts} post${posts === 1 ? "" : "s"} from the waves`
+      + ` (${fmt$(spend, 0)} of spend), so those waves' totals change.` : "")
+    + "\n\nThis can't be undone.";
+  if (!confirm(msg)) return;
+  $("delSel").disabled = true;
+  try {
+    await api("/api/creators/remove", { keys: [...picked] });
+    picked.clear();
+  } catch (err) { alert("Couldn't delete: " + err.message); }
+  finally { $("delSel").disabled = false; load(); }
+};
+
 // Hover / focus explanation for the Quality badge
 const VERDICT = {
   good: ["Good — no warnings", "Every check passed. Safe to buy at a normal price."],
