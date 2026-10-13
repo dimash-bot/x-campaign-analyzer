@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agencies</title>
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee; --border: #e3e3de;
+  --text: #1a1a18; --muted: #6b6b66; --accent: #1d6fe0; --accent-ink: #fff; --accent-soft: #e8f0fc;
+  --good: #16794a; --bad: #b42318; --warn-bg: #fff6e6; --warn-border: #f0d9a8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
+    --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a; --accent-soft: #1c2a40;
+    --good: #4cc38a; --bad: #ff7a6b; --warn-bg: #2e2412; --warn-border: #5a4520;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+nav { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+nav a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 7px; font-weight: 500; }
+nav a.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.me { color: var(--muted); font-size: 12.5px; }
+.me a { color: inherit; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+select, input, button, textarea { font: inherit; color: inherit; }
+input, textarea { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+button { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover { background: var(--surface-2); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.ghost { border-color: transparent; background: transparent; color: var(--muted); padding: 4px 8px; }
+button.ghost:hover { color: var(--bad); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.kpi .l { color: var(--muted); font-size: 12px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; letter-spacing: -0.01em; }
+.kpi .s { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.notice { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
+.table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 8px 9px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+th.l, td.l { text-align: left; }
+th .grp { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; opacity: .8; }
+td small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+td.best { color: var(--good); font-weight: 650; }
+td.worst { color: var(--bad); }
+td.key { background: var(--accent-soft); }
+tr.muted td { color: var(--muted); }
+tr.bench td { font-weight: 650; border-top: 2px solid var(--border); background: var(--surface-2); }
+.name { font-weight: 600; }
+.q { font-size: 11.5px; white-space: nowrap; }
+.q b { font-weight: 600; }
+.q .g { color: var(--good); } .q .b { color: var(--bad); }
+.colsep { border-left: 1px solid var(--border); }
+.legend { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }
+.legend b { color: var(--text); font-weight: 600; }
+.manage td { vertical-align: middle; }
+.manage input { width: 100%; min-width: 120px; }
+.err { color: var(--bad); font-size: 12px; }
+.empty { color: var(--muted); padding: 18px 0; text-align: left; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="row" style="gap:14px">
+      <h1>X Campaign Analyzer</h1>
+      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/agencies" class="on">Agencies</a></nav>
+    </div>
+    <span class="me" id="me"></span>
+  </header>
+
+  <div class="notice" id="howto" hidden>
+    <b>No posts are tagged with an agency yet.</b> On the <a href="/">Waves</a> page, tick the posts bought through an agency and click
+    <b>Set agency</b> (type a new name to create it). Or ask Claude through the connector: "tag these posts in wave 4 as Cristina".
+  </div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <h2>Agencies vs direct vs benchmark</h2>
+    <p class="sub">Each agency against posts we bought directly and against all paid posts (benchmark row). Green = best, red = worst among agencies and direct. Our own account is shown for reference but isn't part of the comparison.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th class="l">Agency</th>
+          <th>Posts</th><th>Creators</th>
+          <th class="colsep"><span class="grp">Cost</span>Spend</th><th><span class="grp">Cost</span>Avg / post</th><th><span class="grp">Cost</span>$ / 1K followers</th>
+          <th class="colsep"><span class="grp">Reach</span>Views</th><th><span class="grp">Reach</span>ER</th><th><span class="grp">Reach</span>CPM</th><th><span class="grp">Reach</span>CPE</th>
+          <th class="colsep"><span class="grp">Est. outcome</span>Regs</th><th class="key"><span class="grp">Est. outcome</span>$ / reg</th><th><span class="grp">Est. outcome</span>API users</th><th class="key"><span class="grp">Est. outcome</span>$ / API user</th><th><span class="grp">Est. outcome</span>API / 100K views</th>
+          <th class="colsep l"><span class="grp">Creators</span>Quality</th><th><span class="grp">Creators</span>Bot followers</th><th><span class="grp">Creators</span>vs median</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+        <tfoot id="foot"></tfoot>
+      </table>
+    </div>
+    <div class="legend">
+      <b>Est. outcome</b>: signups are only known per wave, so each wave's registrations and API users are split across its posts by their share of the wave's views — a fair comparison, not exact attribution (ref links would make it exact).
+      <b>$ / 1K followers</b>: median price per post ÷ creator followers × 1,000. <b>Quality / bot followers / vs median</b> come from the Influencers page (median across the agency's creators).
+      Small grey numbers under a value = that value vs the benchmark (e.g. 0.6× = 40% cheaper than average).
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Cost per API user by agency</h2>
+    <p class="sub">The bottom line: what one activated developer cost through each agency. Dashed line = benchmark (all paid posts).</p>
+    <div style="position:relative;width:100%;height:280px"><canvas id="chart" role="img" aria-label="Bar chart of estimated cost per API user by agency, with the benchmark as a dashed line."></canvas></div>
+  </section>
+
+  <section class="card">
+    <h2>Manage agencies</h2>
+    <p class="sub">Add agencies here or straight from the Waves page (Set agency). Deleting an agency marks its posts as direct again — nothing else changes.</p>
+    <div class="row" style="margin-bottom:12px">
+      <input id="newName" placeholder="Agency name" style="min-width:200px">
+      <input id="newContact" placeholder="Contact (Telegram, email…)" style="min-width:220px">
+      <button class="primary" id="addAgency">+ Add agency</button>
+      <span id="addErr" class="err"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="manage">
+        <thead><tr><th class="l">Name</th><th class="l">Contact</th><th class="l">Notes</th><th class="l">Waves</th><th>Posts</th><th class="l">Added</th><th></th></tr></thead>
+        <tbody id="manage"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ok = (n) => n != null && isFinite(n);
+const fmtN = (n) => !ok(n) ? "—" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
+const fmt$ = (n, d = 2) => !ok(n) ? "—" : "$" + n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (n, d = 2) => !ok(n) ? "—" : n.toFixed(d) + "%";
+const num = (d) => (n) => !ok(n) ? "—" : n.toLocaleString(undefined, { maximumFractionDigits: d });
+let D = null, chart = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+  return r.json();
+}
+
+// [field, formatter, better: "low" | "high" | null, extra class, compare to benchmark?]
+const COLS = [
+  ["posts", num(0)], ["creators", num(0)],
+  ["spend", (v) => fmt$(v, 0), null, "colsep"], ["avg_cost_per_post", (v) => fmt$(v, 0), "low", "", true], ["price_per_1k_followers", (v) => fmt$(v), "low", "", true],
+  ["views", fmtN, "high", "colsep"], ["er_pct", (v) => pct(v), "high", "", true], ["cpm", (v) => fmt$(v), "low", "", true], ["cpe", (v) => fmt$(v, 3), "low", "", true],
+  ["est_registrations", num(0), "high", "colsep"], ["est_cost_per_registration", (v) => fmt$(v), "low", "key", true],
+  ["est_api_users", num(0), "high"], ["est_cost_per_api_user", (v) => fmt$(v), "low", "key", true], ["api_per_100k_views", num(1), "high", "", true],
+];
+
+function qualityCell(r) {
+  const q = r.quality || {};
+  return `<td class="l colsep q"><span class="g"><b>${q.good || 0}</b> good</span> · <b>${q.test || 0}</b> test · <span class="b"><b>${q.bad || 0}</b> bad</span>${q.partial ? `<small>${q.partial} profile-only</small>` : ""}</td>`;
+}
+
+function render() {
+  const A = D.agencies, B = D.benchmark, rows = [...A.filter((a) => a.posts), D.direct].filter((r) => r.posts);
+  $("howto").hidden = A.some((a) => a.posts);
+  const withApi = rows.filter((r) => ok(r.est_cost_per_api_user) && r.id !== "direct");
+  const best = withApi.slice().sort((a, b) => a.est_cost_per_api_user - b.est_cost_per_api_user)[0];
+  const worst = withApi.slice().sort((a, b) => b.est_cost_per_api_user - a.est_cost_per_api_user)[0];
+  const k = (l, v, s = "") => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  const agSpend = A.reduce((s, a) => s + (a.spend || 0), 0);
+  $("kpis").innerHTML = [
+    k("Agencies", A.length, `${A.filter((a) => a.posts).length} with tagged posts`),
+    k("Spend through agencies", fmt$(agSpend, 0), `${ok(D.tagged_spend_pct) ? D.tagged_spend_pct + "%" : "—"} of paid spend · ${fmt$(D.direct.spend, 0)} direct`),
+    k("Benchmark $ / API user", fmt$(B.est_cost_per_api_user), `all paid posts · ${fmt$(B.cpm)} CPM`),
+    k("Best agency", best ? esc(best.name) : "—", best ? `${fmt$(best.est_cost_per_api_user)} per API user (${(best.est_cost_per_api_user / B.est_cost_per_api_user).toFixed(2)}× bench)` : "needs tagged posts"),
+    k("Worst agency", worst && worst !== best ? esc(worst.name) : "—", worst && worst !== best ? `${fmt$(worst.est_cost_per_api_user)} per API user (${(worst.est_cost_per_api_user / B.est_cost_per_api_user).toFixed(2)}×)` : "needs 2+ agencies"),
+  ].join("");
+
+  // best / worst per column among agencies + direct (needs 2+ rows)
+  const ext = {};
+  for (const [f, , dir] of COLS) {
+    const vals = rows.map((r) => r[f]).filter(ok);
+    if (dir && vals.length > 1) ext[f] = dir === "low" ? [Math.min(...vals), Math.max(...vals)] : [Math.max(...vals), Math.min(...vals)];
+  }
+  const cells = (r, opts = {}) => COLS.map(([f, fmt, dir, cls, cmp]) => {
+    const v = r[f], [b, w] = ext[f] || [];
+    const tag = opts.plain || !ok(v) ? "" : v === b ? " best" : v === w ? " worst" : "";
+    const idx = cmp && !opts.plain && ok(v) && ok(B[f]) && B[f] ? `<small>${(v / B[f]).toFixed(2)}×</small>` : "";
+    return `<td class="${cls || ""}${tag}">${fmt(v)}${idx}</td>`;
+  }).join("") + qualityCell(r) + `<td>${ok(r.bot_followers_pct) ? r.bot_followers_pct.toFixed(0) + "%" : "—"}</td><td>${ok(r.vs_median) ? r.vs_median.toFixed(2) + "×" : "—"}</td>`;
+  const nameCell = (r, sub) => `<td class="l"><span class="name">${esc(r.name)}</span><small>${sub || r.waves.join(", ") || "—"}</small></td>`;
+
+  $("rows").innerHTML = (rows.length ? rows.map((r) => `<tr>${nameCell(r)}${cells(r)}</tr>`).join("") : `<tr><td colspan="19" class="empty">No paid posts yet.</td></tr>`)
+    + (D.own.posts ? `<tr class="muted">${nameCell(D.own, "reference only — $0 posts, huge reach")}${cells(D.own, { plain: true })}</tr>` : "");
+  $("foot").innerHTML = `<tr class="bench">${nameCell(B, `${B.posts} posts · ${B.creators} creators`)}${cells(B, { plain: true })}</tr>`;
+
+  // chart: est. $ per API user per agency + direct, benchmark line
+  const cr = rows.filter((r) => ok(r.est_cost_per_api_user));
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const blue = dark ? "#3987e5" : "#2a78d6", red = dark ? "#e66767" : "#e34948", grid = dark ? "#2c2c2a" : "#e1e0d9", muted = "#898781";
+  const data = { labels: cr.map((r) => r.name), datasets: [
+    { type: "bar", data: cr.map((r) => r.est_cost_per_api_user), backgroundColor: cr.map((r) => r.est_cost_per_api_user <= B.est_cost_per_api_user ? blue : red), maxBarThickness: 28, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: "bottom" },
+    { type: "line", data: cr.map(() => B.est_cost_per_api_user), borderColor: muted, borderDash: [5, 4], borderWidth: 2, pointRadius: 0 },
+  ] };
+  if (chart) { chart.data = data; chart.update(); return; }
+  if (!window.Chart) return;
+  Chart.defaults.color = muted;
+  chart = new Chart($("chart"), { data, options: { responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { filter: (i) => i.datasetIndex === 0, callbacks: { label: (c) => `${fmt$(c.parsed.y)} per API user · benchmark ${fmt$(B.est_cost_per_api_user)}` } } },
+    scales: { x: { grid: { display: false } }, y: { beginAtZero: true, grid: { color: grid }, ticks: { callback: (v) => "$" + v } } } } });
+}
+
+function renderManage() {
+  $("manage").innerHTML = D.agencies.length ? D.agencies.map((a) => `<tr data-id="${a.id}">
+    <td class="l"><input data-f="name" value="${esc(a.name)}"></td>
+    <td class="l"><input data-f="contact" value="${esc(a.contact || "")}" placeholder="—"></td>
+    <td class="l"><input data-f="notes" value="${esc(a.notes || "")}" placeholder="terms, rates, quality notes…"></td>
+    <td class="l">${esc(a.waves.join(", ") || "—")}</td><td>${a.posts}</td>
+    <td class="l" style="color:var(--muted)">${a.created_at ? new Date(a.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}${a.created_by ? " · " + esc(a.created_by.split("@")[0]) : ""}</td>
+    <td><button class="ghost" data-del="${a.id}" title="Delete agency (its posts become direct)">✕</button></td></tr>`).join("")
+    : `<tr><td colspan="7" class="empty">No agencies yet.</td></tr>`;
+}
+
+async function load() {
+  try { D = await api("/api/agencies"); render(); if (!document.activeElement?.closest?.("#manage")) renderManage(); } catch (e) {}
+}
+
+$("addAgency").onclick = async () => {
+  $("addErr").textContent = "";
+  try { await api("/api/agencies/save", { name: $("newName").value, contact: $("newContact").value }); $("newName").value = $("newContact").value = ""; load(); }
+  catch (e) { $("addErr").textContent = e.message; }
+};
+$("manage").addEventListener("change", async (e) => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  const v = (f) => tr.querySelector(`[data-f="${f}"]`).value;
+  try { await api("/api/agencies/save", { id: Number(tr.dataset.id), name: v("name"), contact: v("contact"), notes: v("notes") }); e.target.style.borderColor = ""; load(); }
+  catch (err) { e.target.style.borderColor = "var(--bad)"; e.target.title = err.message; }
+});
+$("manage").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-del]"); if (!b) return;
+  const a = D.agencies.find((x) => x.id === Number(b.dataset.del));
+  if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = `Delete ${a.name}? (${a.posts} posts → direct) Click again`; setTimeout(() => { b.dataset.armed = ""; b.textContent = "✕"; }, 4000); return; }
+  await api("/api/agencies/delete", { id: a.id }); load();
+});
+api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
+load(); setInterval(load, 30000);
+</script>
+</body>
+</html>

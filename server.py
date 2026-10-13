@@ -9,6 +9,7 @@ Pieces:
   * Google sign-in (auth.py) — only @ALLOWED_DOMAIN accounts get a session cookie.
   * Daily automatic backups in DATA_DIR/backups, plus download/restore endpoints.
 """
+import collections
 import csv
 import io
 import json
@@ -101,6 +102,10 @@ def init_db():
         add_col("posts", "note", "TEXT")
         add_col("posts", "platform", "TEXT DEFAULT 'x'")       # x | linkedin | other
         add_col("posts", "excluded", "INTEGER DEFAULT 0")      # 1 = keep the post, leave its cost out of budgets
+        add_col("posts", "agency_id", "INTEGER")                # bought through this agency (NULL = direct)
+        c.execute("""CREATE TABLE IF NOT EXISTS agencies (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, contact TEXT, notes TEXT,
+            created_at TEXT, created_by TEXT)""")
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
         # Signup export rows. When present they are the source of truth for daily registrations / API users.
@@ -672,6 +677,135 @@ def sample_counts():
                FROM sample_posts GROUP BY creator_key""")}
 
 
+# ---------------------------------------------------------------- agencies
+
+OWN_HANDLES = {h.strip().lower() for h in os.environ.get("OWN_HANDLES", "naceai").split(",") if h.strip()}
+
+
+def save_agency(name, contact=None, notes=None, email=None, agency_id=None):
+    """Create an agency (or update one by id). Names are unique, case-insensitive."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("agency name is required")
+    with _db_lock, db() as c:
+        if agency_id:
+            c.execute("UPDATE agencies SET name=?, contact=?, notes=? WHERE id=?", (name, contact, notes, int(agency_id)))
+            return {"id": int(agency_id), "name": name}
+        row = c.execute("SELECT id FROM agencies WHERE name=?", (name,)).fetchone()
+        if row:
+            return {"id": row[0], "name": name, "existing": True}
+        cur = c.execute("INSERT INTO agencies(name, contact, notes, created_at, created_by) VALUES (?,?,?,?,?)",
+                        (name, contact, notes, now(), email))
+        return {"id": cur.lastrowid, "name": name}
+
+
+def delete_agency(agency_id):
+    """Delete an agency; its posts become 'direct' again (nothing else is touched)."""
+    with _db_lock, db() as c:
+        n = c.execute("UPDATE posts SET agency_id=NULL WHERE agency_id=?", (int(agency_id),)).rowcount
+        c.execute("DELETE FROM agencies WHERE id=?", (int(agency_id),))
+    return {"deleted": int(agency_id), "posts_now_direct": n}
+
+
+def assign_agency(c, post_ids, agency_id):
+    """Tag posts as bought through an agency (agency_id=None → direct)."""
+    ids = [int(i) for i in post_ids or []]
+    if not ids:
+        raise ValueError("no posts selected")
+    if agency_id is not None and not c.execute("SELECT 1 FROM agencies WHERE id=?", (int(agency_id),)).fetchone():
+        raise ValueError("unknown agency")
+    c.executemany("UPDATE posts SET agency_id=? WHERE id=?", [(None if agency_id is None else int(agency_id), i) for i in ids])
+    return {"posts": len(ids), "agency_id": agency_id}
+
+
+def agencies_view():
+    """One row per agency + 'Direct' (no agency) + our own account, with a benchmark over all paid posts.
+    Registrations / API users per agency are ESTIMATES: each wave's signups are split across its posts by
+    share of views (signups are only known per wave, not per post)."""
+    import statistics
+    dv = lambda a, b: a / b if b else None  # noqa: E731
+    r2 = lambda x, n=2: round(x, n) if x is not None else None  # noqa: E731
+    creators = {c["key"]: c for c in creators_view(enqueue_stale=False)["creators"]}
+    with db() as c:
+        ags = [dict(r) for r in c.execute("SELECT * FROM agencies ORDER BY name")]
+        camps = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM campaigns")}
+        posts = [dict(r) for r in c.execute(f"SELECT * FROM posts WHERE {INCLUDED}")]
+        by_users = user_days(c)
+        wave_tot = {}
+        for cid in camps:
+            d = wave_days(c, cid, by_users)
+            wave_tot[cid] = (sum(x["registrations"] for x in d), sum(x["api_users"] for x in d))
+    wave_views, wave_n = collections.Counter(), collections.Counter()
+    for p in posts:
+        wave_views[p["campaign_id"]] += p["views"] or 0
+        wave_n[p["campaign_id"]] += 1
+
+    def group_of(p):
+        if (p["author"] or "").lower() in OWN_HANDLES:
+            return "own"
+        return p["agency_id"] or "direct"
+    G = {}
+    for p in posts:
+        g = G.setdefault(group_of(p), {"posts": 0, "creators": set(), "waves": set(), "spend": 0.0, "views": 0, "eng": 0, "eng_v": 0,
+                                       "spend_v": 0.0, "spend_e": 0.0, "regs": 0.0, "api": 0.0, "p1kf": []})
+        e = sum(p[m] for m in METRICS[1:])
+        g["posts"] += 1
+        g["creators"].add(creator_key(p["platform"], p["author"]))
+        g["waves"].add(camps.get(p["campaign_id"]))
+        g["spend"] += cost(p)
+        g["views"] += p["views"] or 0
+        g["eng"] += e
+        if p["views"]:
+            g["eng_v"] += e
+            g["spend_v"] += cost(p)
+        if e:
+            g["spend_e"] += cost(p)
+        share = (p["views"] or 0) / wave_views[p["campaign_id"]] if wave_views[p["campaign_id"]] else 1 / wave_n[p["campaign_id"]]
+        regs, api = wave_tot.get(p["campaign_id"], (0, 0))
+        g["regs"] += share * regs
+        g["api"] += share * api
+        f = (creators.get(creator_key(p["platform"], p["author"])) or {}).get("followers")
+        if cost(p) and f:
+            g["p1kf"].append(cost(p) / f * 1000)
+
+    def summarize(gid, name, g, extra=None):
+        cr = [creators[k] for k in g["creators"] if k in creators]
+        verdicts = collections.Counter((x.get("quality") or {}).get("verdict", "partial") for x in cr)
+        med = lambda xs: r2(statistics.median(xs)) if xs else None  # noqa: E731
+        return {"id": gid, "name": name, **(extra or {}),
+                "posts": g["posts"], "creators": len(g["creators"]), "waves": sorted(w for w in g["waves"] if w),
+                "spend": r2(g["spend"]), "avg_cost_per_post": r2(dv(g["spend"], g["posts"])),
+                "views": g["views"], "engagements": g["eng"], "er_pct": r2(dv(g["eng_v"] * 100, g["views"])),
+                "cpm": r2(dv(g["spend_v"] * 1000, g["views"])), "cpe": r2(dv(g["spend_e"], g["eng"])),
+                "est_registrations": round(g["regs"], 1), "est_api_users": round(g["api"], 1),
+                "est_cost_per_registration": r2(dv(g["spend"], g["regs"])), "est_cost_per_api_user": r2(dv(g["spend"], g["api"])),
+                "regs_per_1k_views": r2(dv(g["regs"] * 1000, g["views"]), 3), "api_per_100k_views": r2(dv(g["api"] * 1e5, g["views"])),
+                "price_per_1k_followers": med(g["p1kf"]),
+                "quality": {v: verdicts.get(v, 0) for v in ("good", "test", "bad", "partial")},
+                "bot_followers_pct": med([x["bot_followers_pct"] for x in cr if x.get("bot_followers_pct") is not None]),
+                "vs_median": med([x["vs_median"] for x in cr if x.get("vs_median") is not None]),
+                "creator_keys": sorted(g["creators"])}
+    empty = lambda: {"posts": 0, "creators": set(), "waves": set(), "spend": 0.0, "views": 0, "eng": 0, "eng_v": 0,  # noqa: E731
+                     "spend_v": 0.0, "spend_e": 0.0, "regs": 0.0, "api": 0.0, "p1kf": []}
+    rows = [summarize(a["id"], a["name"], G.get(a["id"], empty()), {"contact": a["contact"], "notes": a["notes"],
+            "created_at": a["created_at"], "created_by": a["created_by"]}) for a in ags]
+    direct = summarize("direct", "Direct (no agency)", G.get("direct", empty()))
+    own = summarize("own", "Own account (" + ", ".join("@" + h for h in sorted(OWN_HANDLES)) + ")", G.get("own", empty()))
+    paid = empty()   # benchmark: every post that isn't our own account
+    for k, g in G.items():
+        if k == "own":
+            continue
+        for f in ("posts", "spend", "views", "eng", "eng_v", "spend_v", "spend_e", "regs", "api"):
+            paid[f] += g[f]
+        paid["creators"] |= g["creators"]
+        paid["waves"] |= g["waves"]
+        paid["p1kf"] += g["p1kf"]
+    bench = summarize("all", "All paid posts (benchmark)", paid)
+    return {"agencies": rows, "direct": direct, "own": own, "benchmark": bench,
+            "tagged_spend_pct": r2(dv(sum(r["spend"] or 0 for r in rows) * 100, bench["spend"]), 1),
+            "note": "Registrations / API users per agency are estimates: each wave's signups split by the post's share of the wave's views."}
+
+
 def creators_view(enqueue_stale=True):
     """One row per creator across all waves: profile + baseline + how their paid posts did."""
     dv = lambda a, b: a / b if b else None  # noqa: E731
@@ -887,6 +1021,11 @@ def restore(data: bytes):
 
 # ---------------------------------------------------------------- data views
 
+def agencies_list():
+    with db() as c:
+        return [dict(r) for r in c.execute("SELECT id, name FROM agencies ORDER BY name")]
+
+
 def state(campaign_id):
     with db() as c:
         campaigns = [dict(r) for r in c.execute("SELECT * FROM campaigns ORDER BY id")]
@@ -896,7 +1035,7 @@ def state(campaign_id):
     with _pending_lock:
         pending = [p["id"] for p in posts if p["id"] in _pending]
     return {"campaigns": campaigns, "posts": posts, "days": days, "pending": pending,
-            "users_total": n_users}
+            "users_total": n_users, "agencies": agencies_list()}
 
 
 # ---------------------------------------------------------------- users → waves
@@ -1330,6 +1469,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/html; charset=utf-8")
         if u.path == "/api/creators":
             return self._send(200, creators_view())
+        if u.path == "/agencies":
+            with open(os.path.join(HERE, "static", "agencies.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/api/agencies":
+            return self._send(200, agencies_view())
         if u.path == "/api/report":
             return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
@@ -1410,6 +1554,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, add_samples(b.get("key", ""), b.get("text", ""),
                                                    None if price is None else float(price or 0)))
             except (ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/agencies/save":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, save_agency(b.get("name"), (b.get("contact") or "").strip() or None,
+                                                   (b.get("notes") or "").strip() or None, user.get("email"), b.get("id")))
+            except (ValueError, sqlite3.IntegrityError) as e:
+                return self._send(400, {"error": "an agency with that name already exists" if isinstance(e, sqlite3.IntegrityError) else str(e)})
+        if path == "/api/agencies/delete":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, delete_agency(b["id"]))
+            except (KeyError, ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/creators/outreach":
             b = json.loads(self._body_bytes() or b"{}")
@@ -1501,6 +1658,12 @@ class Handler(BaseHTTPRequestHandler):
                 if fields:
                     c.execute(f"UPDATE posts SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?",
                               (*fields.values(), b["id"]))
+
+            elif path == "/api/posts/agency":
+                try:
+                    result = assign_agency(c, b.get("ids"), b.get("agency_id"))
+                except (ValueError, TypeError) as e:
+                    return self._send(400, {"error": str(e)})
 
             elif path == "/api/posts/pack":
                 try:

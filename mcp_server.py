@@ -114,6 +114,19 @@ TOOLS = [
                     "posts excluded), and how our paid posts did: avg views, vs_median (×), reach %, ER, CPM, CPE, "
                     "$ per 1K followers. Optional filter by wave.",
      "inputSchema": {"type": "object", "properties": {"campaign": _campaign_arg("Optional: only creators in this wave")}}},
+    {"name": "get_agencies",
+     "description": "Compare agencies we bought influencer posts through: per agency vs 'Direct' (no agency) vs our own "
+                    "account vs a benchmark over all paid posts — spend, views, ER, CPM, CPE, estimated registrations and API "
+                    "users (each wave's signups split by the post's share of views), cost per registration / API user, "
+                    "creator quality mix and bot followers.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "set_post_agency",
+     "description": "Tag posts as bought through an agency (creates the agency if it doesn't exist yet). Pass agency "
+                    "null/empty to mark them as direct again.",
+     "inputSchema": {"type": "object", "required": ["campaign", "urls"], "properties": {
+         "campaign": _campaign_arg(), "urls": {"type": "array", "items": {"type": "string"}, "description": "post links in that wave"},
+         "agency": {"type": ["string", "null"], "description": "agency name, e.g. 'Cristina'; empty/null = direct"},
+         "contact": {"type": "string", "description": "optional contact for a new agency"}}}},
     {"name": "set_outreached",
      "description": "Mark influencers as outreached (we've texted/DMed them) or not. Identify each by X handle or, for "
                     "LinkedIn, their name. Shows as the Outreached tick box on the Influencers page.",
@@ -181,6 +194,20 @@ def call_tool(app, user, name, args):
             r.pop("avatar", None)
         return {"creators": v["creators"], "x_login_configured": v["x_login"],
                 "note": "vs_median = avg views of our paid post / their median views. Missing medians can be filled with set_creator_stats."}
+    if name == "get_agencies":
+        v = app.agencies_view()
+        for r in v["agencies"] + [v["direct"], v["own"], v["benchmark"]]:
+            r.pop("creator_keys", None)
+        return v
+    if name == "set_post_agency":
+        email = user if isinstance(user, str) else (user or {}).get("email")
+        name_ = (args.get("agency") or "").strip()
+        aid = app.save_agency(name_, args.get("contact"), None, email)["id"] if name_ else None
+        with app._db_lock, app.db() as c:
+            cid = _campaign_id(app, c, args["campaign"])
+            ids = [_post(app, c, cid, u)["id"] for u in args["urls"]]
+            res = app.assign_agency(c, ids, aid)
+        return {**res, "agency": name_ or "direct"}
     if name == "set_outreached":
         keys = [app.creator_key(args.get("platform") or "x", str(h).lstrip("@")) for h in args.get("creators") or []]
         email = user if isinstance(user, str) else (user or {}).get("email")

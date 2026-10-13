@@ -7,13 +7,13 @@
 <style>
 :root {
   --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee; --border: #e3e3de;
-  --text: #1a1a18; --muted: #6b6b66; --accent: #1d6fe0; --accent-ink: #fff;
+  --text: #1a1a18; --muted: #6b6b66; --accent: #1d6fe0; --accent-ink: #fff; --accent-soft: #e8f0fc;
   --good: #16794a; --bad: #b42318; --warn-bg: #fff4e5;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
-    --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a;
+    --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a; --accent-soft: #1c2a40;
     --good: #4cc38a; --bad: #ff7a6b; --warn-bg: #3a2a12;
   }
 }
@@ -54,6 +54,7 @@ td input { width: 90px; text-align: right; padding: 4px 6px; }
 td input[type=date] { width: 140px; text-align: left; }
 .post-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .post-cell a { color: var(--text); text-decoration: none; font-weight: 600; }
+.badge.agency { background: var(--accent-soft, #e8f0fc); color: var(--accent); border-color: transparent; }
 .badge { display: inline-block; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 1px 6px; border-radius: 5px;
   margin-right: 5px; vertical-align: 1px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
 td input.metric { width: 80px; }
@@ -111,7 +112,7 @@ td input.note { width: 170px; text-align: left; }
   <header>
     <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
       <h1>X Campaign Analyzer</h1>
-      <nav class="tabs"><a href="/" class="on">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a></nav>
+      <nav class="tabs"><a href="/" class="on">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/agencies">Agencies</a></nav>
     </div>
     <div class="row">
       <select id="campaign" aria-label="Campaign"></select>
@@ -159,6 +160,7 @@ td input.note { width: 170px; text-align: left; }
       <button data-preset="budget">Most expensive</button>
       <button data-preset="day">By date</button>
       <span class="hint" style="margin:0">or click any column header</span>
+      <button id="agencyBtn" title="Tag the ticked posts as bought through an agency (compare agencies on the Agencies page)">Set agency</button>
       <button id="packBtn" title="One price for a bundle of posts: split evenly across the ticked posts (or all posts in this wave)">$ Set pack price</button>
     </div>
     <div class="table-wrap">
@@ -221,7 +223,8 @@ td input.note { width: 170px; text-align: left; }
 <div class="overlay" id="dlg">
   <form class="modal" id="dlgForm" role="dialog" aria-modal="true" aria-labelledby="dlgMsg">
     <p id="dlgMsg"></p>
-    <input id="dlgInput" autocomplete="off">
+    <input id="dlgInput" autocomplete="off" list="agencyList">
+    <datalist id="agencyList"></datalist>
     <div class="row">
       <button type="button" id="dlgCancel">Cancel</button>
       <button type="submit" class="primary" id="dlgOk">OK</button>
@@ -263,6 +266,8 @@ function packLabel() {
   [...picked].forEach((id) => ids.has(id) || picked.delete(id));
   $("packBtn").textContent = picked.size ? `$ Set pack price for ${picked.size} selected` : "$ Set pack price";
   $("packBtn").classList.toggle("armed", picked.size > 0);
+  $("agencyBtn").textContent = picked.size ? `Set agency for ${picked.size} selected` : "Set agency";
+  $("agencyBtn").classList.toggle("armed", picked.size > 0);
   $("selAll").checked = picked.size > 0 && picked.size === S.posts.length;
   $("selAll").indeterminate = picked.size > 0 && picked.size < S.posts.length;
 }
@@ -380,7 +385,7 @@ function render() {
     const e = eng(p);
     return `<tr class="${picked.has(p.id) ? "picked" : ""}${p.excluded ? " excluded" : ""}">
       <td class="rank l"><label><input type="checkbox" data-sel="${p.id}" ${picked.has(p.id) ? "checked" : ""}>${i + 1}</label></td>
-      <td class="post-cell l"><span class="badge">${PLAT[p.platform || "x"]}</span><a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || "…")}</a>${p.excluded ? `<span class="excl-tag" title="Not counted in any total">excluded</span>` : ""}
+      <td class="post-cell l"><span class="badge">${PLAT[p.platform || "x"]}</span>${p.agency_id ? `<span class="badge agency" title="Bought through this agency">${esc((S.agencies || []).find((a) => a.id === p.agency_id)?.name || "agency")}</span>` : ""}<a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || "…")}</a>${p.excluded ? `<span class="excl-tag" title="Not counted in any total">excluded</span>` : ""}
         <div class="t" title="${esc(p.text)}">${esc((p.text || "").slice(0, 70))}</div>
         ${S.pending.includes(p.id) ? `<div class="fetching">⟳ fetching metrics…</div>` : p.fetch_error ? `<div class="err">⚠ ${esc(p.fetch_error)}</div>` : ""}</td>
       <td class="l"><input class="note" value="${esc(p.note || "")}" data-post="${p.id}" data-f="note" placeholder="payment note"></td>
@@ -461,7 +466,7 @@ function parsePaste(text, defaultBudget) {
 
 // In-page replacements for prompt()/confirm() — embedded browsers often block those, and some don't
 // render native <dialog> either, so this is a plain fixed overlay.
-function ask(msg, { input = false, value = "", ok = "OK" } = {}) {
+function ask(msg, { input = false, value = "", ok = "OK", emptyOk = false } = {}) {
   const d = $("dlg"), form = $("dlgForm"), inp = $("dlgInput");
   $("dlgMsg").textContent = msg;
   $("dlgOk").textContent = ok;
@@ -474,7 +479,8 @@ function ask(msg, { input = false, value = "", ok = "OK" } = {}) {
     const done = (accepted) => {
       d.classList.remove("open");
       form.onsubmit = $("dlgCancel").onclick = d.onclick = document.onkeydown = null;
-      res(input ? (accepted ? inp.value.trim() || null : null) : accepted);
+      // cancelled → null; saved empty → null, or "" when emptyOk (empty is a real answer there)
+      res(input ? (accepted ? (emptyOk ? inp.value.trim() : inp.value.trim() || null) : null) : accepted);
     };
     form.onsubmit = (e) => { e.preventDefault(); done(true); };
     $("dlgCancel").onclick = () => done(false);
@@ -577,6 +583,28 @@ $("sortbar").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-preset]");
   if (b) setSort(b.dataset.preset, { views: "desc", eng: "desc", er: "desc", cpm: "asc", cpe: "asc", budget: "desc", day: "asc" }[b.dataset.preset]);
 });
+// Tag ticked posts with an agency (type a new name to create it; leave empty for 'direct')
+$("agencyBtn").onclick = async () => {
+  const posts = S.posts.filter((p) => picked.has(p.id));
+  if (!posts.length) return toast("Tick the posts bought through the agency first");
+  const ags = S.agencies || [];
+  $("agencyList").innerHTML = ags.map((a) => `<option value="${esc(a.name)}">`).join("");
+  const cur = [...new Set(posts.map((p) => ags.find((a) => a.id === p.agency_id)?.name || ""))];
+  const name = await ask(`Agency for ${posts.length} selected post${posts.length === 1 ? "" : "s"}\n(pick one or type a new name — leave empty for "direct, no agency")`,
+    { input: true, value: cur.length === 1 ? cur[0] : "", ok: "Save", emptyOk: true });
+  $("agencyList").innerHTML = "";
+  if (name === null) return;   // cancelled
+  try {
+    let agency_id = null;
+    if (name) {
+      const hit = ags.find((a) => a.name.toLowerCase() === name.toLowerCase());
+      agency_id = hit ? hit.id : (await api("/api/agencies/save", { name })).id;
+    }
+    await api("/api/posts/agency", { ids: posts.map((p) => p.id), agency_id });
+    toast(agency_id ? `${posts.length} post${posts.length === 1 ? "" : "s"} → ${name}` : `${posts.length} post${posts.length === 1 ? "" : "s"} marked direct`);
+    picked.clear(); load();
+  } catch (e) { toast("Couldn't set agency: " + e.message.slice(0, 100)); }
+};
 $("packBtn").onclick = async () => {
   const posts = picked.size ? S.posts.filter((p) => picked.has(p.id)) : S.posts;
   if (!posts.length) return toast("No posts in this wave yet");
