@@ -41,10 +41,14 @@ button:disabled { opacity: .5; cursor: default; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grow { flex: 1 1 160px; min-width: 0; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-.layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-@media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
-.plan-col { position: sticky; top: 12px; }
-@media (max-width: 1000px) { .plan-col { position: static; } }
+.layout { display: flex; flex-direction: column; }
+.plan-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 20px; align-items: start; }
+@media (max-width: 1000px) { .plan-grid { grid-template-columns: 1fr; } }
+.plan-list { max-height: 520px; overflow: auto; }
+td.l, th.l { text-align: left; }
+.sep { border-left: 1px solid var(--border); }
+.grp { display: block; font-size: 10.5px; color: var(--muted); opacity: .8; }
+td.bad { color: var(--bad); } td.warn { color: var(--warn); } td.good { color: var(--good); }
 .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 12px 0; }
 .kpi { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
 .kpi .l { color: var(--muted); font-size: 11.5px; }
@@ -54,7 +58,7 @@ button:disabled { opacity: .5; cursor: default; }
 .kpi.hl .v { color: var(--accent); }
 .kpi .s.up { color: var(--good); } .kpi .s.down { color: var(--bad); }
 .table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
-.picker { max-height: 70vh; overflow: auto; }
+.picker { max-height: 75vh; overflow: auto; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
 th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
@@ -110,39 +114,7 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
   </header>
 
   <div class="layout">
-    <!-- Left: everyone we've collected -->
-    <section class="card">
-      <h2>Creators</h2>
-      <p class="sub">Everyone on Influencers. Click <b>+</b> to put a creator in the plan. Expected views come from their
-        paid posts with us when we have them, otherwise from their own median.</p>
-      <div class="row" style="margin-bottom:10px">
-        <input id="q" class="grow" placeholder="Search handle or name" autocomplete="off">
-        <select id="fVerdict" title="Quality verdict">
-          <option value="">Any quality</option><option value="good">Good</option><option value="test">Test</option>
-          <option value="partial">Profile only</option><option value="bad">Bad</option>
-        </select>
-        <select id="fHist" title="Have we paid them before?">
-          <option value="">New + repeat</option><option value="repeat">Paid before</option><option value="new">Never paid</option>
-        </select>
-      </div>
-      <div class="chips" id="quick" style="margin-bottom:10px">
-        <span class="chip" data-quick="good">+ All good</span>
-        <span class="chip" data-quick="top10">+ Top 10 by expected CPM</span>
-      </div>
-      <div class="table-wrap picker">
-        <table>
-          <thead><tr>
-            <th></th><th data-sort="handle">Creator</th><th data-sort="qrank">Quality</th><th data-sort="followers">Followers</th>
-            <th data-sort="exp_views">Exp. views</th><th data-sort="exp_er">ER</th><th data-sort="def_price">Price</th>
-            <th data-sort="exp_cpm">Exp. CPM</th><th data-sort="posts">Paid posts</th>
-          </tr></thead>
-          <tbody id="pick"></tbody>
-        </table>
-      </div>
-      <p class="status" id="pickCount" style="margin:8px 0 0"></p>
-    </section>
-
-    <!-- Right: the wave being built -->
+    <!-- The wave being built -->
     <section class="plan-col">
       <div class="card">
         <div class="row" style="margin-bottom:8px">
@@ -162,11 +134,13 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
           <select id="bench" class="grow" title="Which past results to use for registrations and API users"></select>
         </div>
 
+        <div class="plan-grid"><div>
         <section class="kpis" id="kpis"></section>
         <div id="mix"></div>
         <div class="warns" id="warns"></div>
 
-        <div class="table-wrap">
+        </div><div>
+        <div class="table-wrap plan-list">
           <table>
             <thead><tr><th></th><th>Creator</th><th>Exp. views</th><th>Price $</th><th>CPM</th><th>Exp. regs</th></tr></thead>
             <tbody id="plan"></tbody>
@@ -187,8 +161,57 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
             like the benchmark did — treat them as a range, not a promise.</p>
           <p>Creators missing views or a price are left out of CPM and cost per registration (shown as a warning).</p>
         </details>
+        </div></div>
       </div>
     </section>
+    <!-- Everyone we've collected, full Influencers columns -->
+    <section class="card">
+      <h2>Creators</h2>
+      <p class="sub">All creators from Influencers, same columns. Click <b>+</b> to put a creator in the plan. Expected views come from their
+        paid posts with us when we have them, otherwise from their own median.</p>
+      <div class="row" style="margin-bottom:10px">
+        <input id="q" class="grow" placeholder="Search handle or name" autocomplete="off">
+        <select id="fVerdict" title="Quality verdict">
+          <option value="">Any quality</option><option value="good">Good</option><option value="test">Test</option>
+          <option value="partial">Profile only</option><option value="bad">Bad</option>
+        </select>
+        <select id="fHist" title="Have we paid them before?">
+          <option value="">New + repeat</option><option value="repeat">Paid before</option><option value="new">Never paid</option>
+        </select>
+      </div>
+      <div class="chips" id="quick" style="margin-bottom:10px">
+        <span class="chip" data-quick="good">+ All good</span>
+        <span class="chip" data-quick="top10">+ Top 10 by expected CPM</span>
+      </div>
+      <div class="table-wrap picker">
+        <table>
+          <thead><tr>
+            <th></th><th data-sort="handle">Creator</th>
+            <th class="l" data-sort="outreached"><span class="grp">Status</span>Outreached</th>
+            <th class="l" data-sort="added_at"><span class="grp">Status</span>Added</th>
+            <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
+            <th data-sort="bot_followers_pct" title="Share of their newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
+            <th class="sep" data-sort="followers"><span class="grp">Profile</span>Followers</th>
+            <th data-sort="median_views"><span class="grp">Their normal</span>Median views</th>
+            <th data-sort="median_er"><span class="grp">Their normal</span>ER</th>
+            <th class="sep" data-sort="posts"><span class="grp">With us</span>Posts</th>
+            <th data-sort="paid"><span class="grp">With us</span>Paid</th>
+            <th data-sort="views"><span class="grp">With us</span>Views</th>
+            <th data-sort="vs_median"><span class="grp">With us</span>vs median</th>
+            <th data-sort="reach_pct"><span class="grp">With us</span>Reach</th>
+            <th data-sort="er_pct"><span class="grp">With us</span>ER</th>
+            <th data-sort="cpm"><span class="grp">With us</span>CPM</th>
+            <th data-sort="price_per_1k_followers"><span class="grp">With us</span>$ / 1K foll.</th>
+            <th class="sep" data-sort="exp_views"><span class="grp">For the plan</span>Exp. views</th>
+            <th data-sort="def_price"><span class="grp">For the plan</span>Price</th>
+            <th data-sort="exp_cpm"><span class="grp">For the plan</span>Exp. CPM</th>
+          </tr></thead>
+          <tbody id="pick"></tbody>
+        </table>
+      </div>
+      <p class="status" id="pickCount" style="margin:8px 0 0"></p>
+    </section>
+
   </div>
 </div>
 
@@ -198,6 +221,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const ok = (n) => n != null && isFinite(n);
 const fmtN = (n) => !ok(n) ? "—" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
 const fmt$ = (n, d = 0) => !ok(n) ? "—" : "$" + n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmtD = (s) => new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 const pct = (n, d = 2) => !ok(n) ? "—" : n.toFixed(d) + "%";
 const QRANK = { good: 3, test: 2, partial: 1, bad: 0 };
 const QLABEL = { good: "Good", test: "Test", partial: "Profile only", bad: "Bad" };
@@ -213,7 +237,7 @@ async function api(path, body) {
 let C = [], byKey = {}, R = null, PLANS = [];
 // The plan being edited: {id, name, notes, items: [{key, price}]}
 let plan = { id: null, name: "", notes: "", items: [] }, dirty = false;
-let sort = { key: "exp_cpm", dir: "asc" };
+let sort = { key: "added_at", dir: "desc" };   // same default as Influencers: newest first
 const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
                 set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 
@@ -271,15 +295,26 @@ function renderPicker() {
     return `<tr class="${on ? "in" : ""}">
       <td><button class="add" data-toggle="${esc(c.key)}" title="${on ? "Remove from plan" : "Add to plan"}">${on ? "✓" : "+"}</button></td>
       <td>${who(c)}</td>
-      <td><span class="badge ${v}" title="${esc([...(c.quality?.kills || []), ...(c.quality?.flags || [])].join("\n"))}">${QLABEL[v]}</span></td>
-      <td>${fmtN(c.followers)}</td>
-      <td>${fmtN(c.exp_views)}<span class="src">${esc(c.views_src)}</span></td>
-      <td>${pct(c.exp_er)}</td>
+      <td class="l">${c.outreached ? `<span title="${esc((c.outreached_by || "") + " " + (c.outreached_at || ""))}">✓ ${c.outreached_at ? fmtD(c.outreached_at) : ""}</span>` : `<span class="muted">—</span>`}</td>
+      <td class="l">${c.added_at ? fmtD(c.added_at) : "—"}</td>
+      <td class="l"><span class="badge ${v}" title="${esc([...(c.quality?.kills || []), ...(c.quality?.flags || [])].join("\n"))}">${QLABEL[v]}</span></td>
+      <td class="${c.bot_followers_pct > 50 ? "bad" : c.bot_followers_pct > 40 ? "warn" : ""}">${ok(c.bot_followers_pct) ? c.bot_followers_pct.toFixed(0) + "%" : "—"}</td>
+      <td class="sep">${fmtN(c.followers)}</td>
+      <td>${fmtN(c.median_views)}</td>
+      <td>${pct(c.median_er)}</td>
+      <td class="sep">${c.posts || "—"}${c.waves.length ? `<span class="src" title="${esc(c.waves.join(", "))}">${c.waves.length} wave${c.waves.length === 1 ? "" : "s"}</span>` : ""}</td>
+      <td>${c.paid ? fmt$(c.paid) : "—"}</td>
+      <td>${c.views ? fmtN(c.views) : "—"}</td>
+      <td class="${c.vs_median >= 1 ? "good" : ok(c.vs_median) && c.vs_median < 0.5 ? "bad" : ""}">${ok(c.vs_median) ? c.vs_median.toFixed(2) + "×" : "—"}</td>
+      <td>${pct(c.reach_pct, 1)}</td>
+      <td>${pct(c.er_pct)}</td>
+      <td>${fmt$(c.cpm, 2)}</td>
+      <td>${fmt$(c.price_per_1k_followers, 2)}</td>
+      <td class="sep">${fmtN(c.exp_views)}<span class="src">${esc(c.views_src)}</span></td>
       <td>${fmt$(c.def_price)}<span class="src">${esc(c.price_src)}</span></td>
       <td>${fmt$(c.exp_cpm, 2)}</td>
-      <td>${c.posts || "—"}${c.waves.length ? `<span class="src" title="${esc(c.waves.join(", "))}">${c.waves.length} wave${c.waves.length === 1 ? "" : "s"}</span>` : ""}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="9" class="empty">No creators match.</td></tr>`;
+  }).join("") : `<tr><td colspan="20" class="empty">No creators match.</td></tr>`;
   $("pickCount").textContent = `${V.length} of ${C.length} creators shown · ${plan.items.length} in the plan`;
 }
 
@@ -405,8 +440,8 @@ $("plan").addEventListener("change", (e) => {
 document.querySelectorAll("th[data-sort]").forEach((th) => th.addEventListener("click", () => {
   const k = th.dataset.sort;
   sort = sort.key === k ? { key: k, dir: sort.dir === "asc" ? "desc" : "asc" }
-    : { key: k, dir: ["handle", "exp_cpm", "def_price"].includes(k) ? "asc" : "desc" };
-  store.set("xca_bsort", sort); renderPicker();
+    : { key: k, dir: ["handle", "exp_cpm", "def_price", "cpm", "price_per_1k_followers", "bot_followers_pct"].includes(k) ? "asc" : "desc" };
+  store.set("xca_bsort2", sort); renderPicker();
 }));
 ["q", "fVerdict", "fHist"].forEach((id) => $(id).addEventListener("input", renderPicker));
 $("bench").addEventListener("change", () => { store.set("xca_bench", $("bench").value); renderPlan(); });
@@ -475,7 +510,7 @@ async function load() {
   $("bench").innerHTML = `<option value="all">All waves (${ok(R.totals.regs_per_1k_views) ? R.totals.regs_per_1k_views.toFixed(2) : "—"} regs / 1K views)</option>` +
     waves.map((w) => `<option value="${w.id}">${esc(w.name)} (${ok(w.regs_per_1k_views) ? w.regs_per_1k_views.toFixed(2) : "—"} / 1K)</option>`).join("");
   if (saved && [...$("bench").options].some((o) => o.value === saved)) $("bench").value = saved;
-  sort = store.get("xca_bsort") || sort;
+  sort = store.get("xca_bsort2") || sort;
   const draft = store.get("xca_plan_draft");
   if (draft && Array.isArray(draft.items)) {
     plan = draft; $("name").value = plan.name || ""; $("notes").value = plan.notes || "";
@@ -486,7 +521,7 @@ async function load() {
   renderPlans(); render();
 }
 api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
-load().catch((e) => { $("pick").innerHTML = `<tr><td colspan="9" class="empty">Couldn't load: ${esc(e.message)}</td></tr>`; });
+load().catch((e) => { $("pick").innerHTML = `<tr><td colspan="20" class="empty">Couldn't load: ${esc(e.message)}</td></tr>`; });
 </script>
 </body>
 </html>
