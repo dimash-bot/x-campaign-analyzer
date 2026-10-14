@@ -64,6 +64,17 @@ td input.metric.need { border-color: var(--accent); }
 .err { color: var(--bad); font-size: 12px; }
 .fetching { color: var(--accent); font-size: 12px; }
 .muted { color: var(--muted); }
+#roster td.l, #roster th.l { text-align: left; }
+.rwho { display: flex; gap: 8px; align-items: center; }
+.rwho img, .rwho .ph { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; background: var(--surface-2); flex: none; }
+.rwho small { display: block; color: var(--muted); font-size: 11.5px; }
+.rwho a { color: inherit; text-decoration: none; font-weight: 600; }
+.ok { color: var(--good); font-weight: 600; }
+.sm { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+a.dm { color: var(--accent); text-decoration: none; font-weight: 600; white-space: nowrap; }
+a.dm:hover { text-decoration: underline; }
+.rbtn { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.rbtn:hover { border-color: var(--accent); color: var(--accent); }
 .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
 th[data-sort] { cursor: pointer; user-select: none; }
 th[data-sort]:hover { color: var(--text); }
@@ -128,6 +139,21 @@ td input.note { width: 170px; text-align: left; }
   </header>
 
   <section class="kpis" id="kpis"></section>
+
+  <section class="card" id="rosterCard" hidden>
+    <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;justify-content:space-between">
+      <h2 style="margin:0">Influencers in this wave</h2>
+      <span class="row"><button id="rosterMsg" class="rbtn">✉ Message not contacted</button><a id="rosterEdit" class="dm" href="/builder">Edit in Wave builder →</a></span>
+    </div>
+    <p class="muted" id="rosterSub" style="font-size:12.5px;margin:4px 0 10px"></p>
+    <div class="table-wrap">
+      <table id="roster">
+        <thead><tr><th class="l">Creator</th><th>Followers</th><th>Planned $</th><th class="l">Outreach</th><th class="l">Sent from</th>
+          <th class="l">DM</th><th class="l">Paid</th><th class="l">Post in this wave</th></tr></thead>
+        <tbody id="rosterRows"></tbody>
+      </table>
+    </div>
+  </section>
 
   <section class="card">
     <h2>1 · Add post links</h2>
@@ -232,6 +258,7 @@ td input.note { width: 170px; text-align: left; }
   </form>
 </div>
 
+<script src="/outreach.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const ENG = ["likes", "retweets", "quotes", "replies", "bookmarks"];
@@ -332,7 +359,41 @@ function aggregateDays() {
   return Object.values(m).sort((a, b) => a.day.localeCompare(b.day));
 }
 
+// Creators planned in the Wave builder for this wave: DM link, which of our accounts contacted them, paid, posted
+function renderRoster() {
+  const R = S.roster;
+  $("rosterCard").hidden = !R;
+  if (!R) return;
+  const L = R.creators, d = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+  const contacted = L.filter((c) => c.outreached).length, posted = L.filter((c) => c.posted).length;
+  $("rosterSub").textContent = `${L.length} creators from plan "${R.plan_name}" · ${contacted} contacted · ${L.filter((c) => c.paid_status === "paid").length} paid · ${posted} posted.`
+    + (posted < L.length ? " Add their post links above once they're live." : "");
+  $("rosterEdit").href = "/builder?plan=" + R.plan_id;
+  $("rosterMsg").hidden = contacted === L.length;
+  $("rosterRows").innerHTML = L.length ? L.map((c) => {
+    const x = c.platform === "x", dm = Outreach.dmUrl(c);
+    return `<tr>
+      <td class="l"><div class="rwho">${c.avatar ? `<img src="${esc(c.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="ph"></span>`}
+        <div><a href="${x ? "https://x.com/" + encodeURIComponent(c.handle) : esc(dm || "#")}" target="_blank" rel="noopener">${esc(c.name)}</a><small>${x ? "@" + esc(c.handle) : esc(PLAT[c.platform] || c.platform)}</small></div></div></td>
+      <td>${fmtN(c.followers)}</td>
+      <td>${c.price != null ? fmt$(c.price, 0) : "—"}</td>
+      <td class="l">${c.outreached ? `<span class="ok">✓ Contacted</span><span class="sm">${esc((c.outreached_by || "").split("@")[0])} · ${d(c.outreached_at)}${c.messages > 1 ? ` · ${c.messages} msgs` : ""}</span>` : `<span class="muted">Not yet</span>`}</td>
+      <td class="l">${c.outreach_from ? `<b>@${esc(c.outreach_from)}</b>` : "—"}</td>
+      <td class="l">${dm ? `<a class="dm" href="${esc(dm)}" target="_blank" rel="noopener" title="${x && c.user_id ? "Open your DM chat with them (log in as the account that sent it)" : "Profile — DM from there"}">Open DM ↗</a>` : "—"}
+        <button class="rbtn" data-rmsg="${esc(c.key)}" title="Write and log a message">✉</button></td>
+      <td class="l">${c.paid_status === "paid" ? `<span class="ok">Paid</span>` : `<span class="muted">Not paid</span>`}${c.paid_status_manual ? "" : `<span class="sm">auto</span>`}</td>
+      <td class="l">${c.posted ? `<span class="ok">✓ ${c.posted} post${c.posted === 1 ? "" : "s"}</span>` : `<span class="muted">waiting</span>`}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="8" class="muted" style="text-align:center;padding:16px">The plan has no creators.</td></tr>`;
+}
+$("rosterRows").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-rmsg]");
+  if (b) Outreach.open([S.roster.creators.find((c) => c.key === b.dataset.rmsg)], { onDone: load });
+});
+$("rosterMsg").onclick = () => Outreach.open(S.roster.creators.filter((c) => !c.outreached), { onDone: load });
+
 function render() {
+  renderRoster();
   $("campaign").innerHTML = S.campaigns.map((c) => `<option value="${c.id}" ${c.id === cid ? "selected" : ""}>${esc(c.name)}</option>`).join("");
   $("exportCsv").href = "/api/export.csv?campaign=" + cid;
 

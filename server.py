@@ -110,6 +110,7 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS plans (
             id INTEGER PRIMARY KEY, name TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', notes TEXT,
             created_at TEXT, created_by TEXT, updated_at TEXT, updated_by TEXT)""")
+        add_col("plans", "campaign_id", "INTEGER")   # set once the plan was sent to Waves
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
         # Signup export rows. When present they are the source of truth for daily registrations / API users.
@@ -1128,8 +1129,12 @@ def restore(data: bytes):
 def plans_list():
     with db() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM plans ORDER BY updated_at DESC, id DESC")]
+        waves = {r[0]: r[1] for r in c.execute("SELECT id, name FROM campaigns")}
     for r in rows:
         r["items"] = json.loads(r["items"] or "[]")
+        r["campaign_name"] = waves.get(r["campaign_id"])
+        if r["campaign_id"] not in waves:   # wave was deleted on the Waves page
+            r["campaign_id"] = None
     return {"plans": rows}
 
 
@@ -1163,6 +1168,63 @@ def save_plan(name, items, notes=None, email=None, plan_id=None):
         return {"id": cur.lastrowid, "name": name, "items": len(clean)}
 
 
+def plan_to_wave(plan_id, email=None):
+    """Turn a builder plan into a wave on the Waves page. The wave shows the plan's creators as its roster
+    (outreach status, DM link, account used); their posts are added to the wave as usual once they're live."""
+    with _db_lock, db() as c:
+        row = c.execute("SELECT * FROM plans WHERE id=?", (int(plan_id),)).fetchone()
+        if not row:
+            raise ValueError("plan not found — save it first")
+        if row["campaign_id"] and c.execute("SELECT 1 FROM campaigns WHERE id=?", (row["campaign_id"],)).fetchone():
+            return {"campaign_id": row["campaign_id"], "existing": True}
+        name, n = row["name"], 2
+        while c.execute("SELECT 1 FROM campaigns WHERE name=?", (name,)).fetchone():
+            name, n = f"{row['name']} ({n})", n + 1
+        cid = c.execute("INSERT INTO campaigns(name, created_at) VALUES (?, ?)", (name, now())).lastrowid
+        c.execute("UPDATE plans SET campaign_id=?, updated_at=?, updated_by=? WHERE id=?", (cid, now(), email, int(plan_id)))
+    return {"campaign_id": cid, "name": name}
+
+
+def wave_roster(c, campaign_id):
+    """Creators planned for this wave (from its builder plan) with outreach + paid status and whether they've posted."""
+    plan = c.execute("SELECT * FROM plans WHERE campaign_id=? ORDER BY id DESC LIMIT 1", (campaign_id,)).fetchone()
+    if not plan:
+        return None
+    items = json.loads(plan["items"] or "[]")
+    keys = [i["key"] for i in items]
+    if not keys:
+        return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": []}
+    qs = ",".join("?" * len(keys))
+    prof = {r["key"]: dict(r) for r in c.execute(f"SELECT * FROM creators WHERE key IN ({qs})", keys)}
+    msgs = {r[0]: r[1] for r in c.execute(f"SELECT creator_key, count(*) FROM outreach_log WHERE creator_key IN ({qs}) GROUP BY creator_key", keys)}
+    posted, paid_any, want, spent = {}, set(), set(keys), {}
+    for p in c.execute(f"SELECT campaign_id, platform, author, budget FROM posts WHERE author IS NOT NULL AND {INCLUDED}"):
+        k = creator_key(p["platform"], p["author"])
+        if k in want:
+            if p["campaign_id"] == campaign_id:
+                posted[k] = posted.get(k, 0) + 1
+            if (p["budget"] or 0) > 0:
+                paid_any.add(k)
+                n, tot = spent.get(k, (0, 0.0))
+                spent[k] = (n + 1, tot + p["budget"])
+    out = []
+    for it in items:
+        k, pr = it["key"], prof.get(it["key"], {})
+        platform, _, handle = k.partition(":")
+        manual = pr.get("paid_status") in PAID_STATUSES
+        # planned price: typed in the builder, else their quote, else what we paid per post before
+        price = it.get("price") if it.get("price") is not None else pr.get("quote_price") or (
+            round(spent[k][1] / spent[k][0], 2) if k in spent else None)
+        out.append({"key": k, "platform": pr.get("platform") or platform, "handle": pr.get("handle") or handle,
+                    "name": pr.get("name") or pr.get("handle") or handle, "avatar": pr.get("avatar"), "user_id": pr.get("user_id"),
+                    "followers": pr.get("followers"), "median_views": pr.get("median_views"), "price": price,
+                    "outreached": bool(pr.get("outreached")), "outreached_by": pr.get("outreached_by"),
+                    "outreached_at": pr.get("outreached_at"), "outreach_from": pr.get("outreach_from"), "messages": msgs.get(k, 0),
+                    "paid_status": pr["paid_status"] if manual else ("paid" if k in paid_any else "not_paid"),
+                    "paid_status_manual": manual, "posted": posted.get(k, 0)})
+    return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": out}
+
+
 def delete_plan(plan_id):
     with _db_lock, db() as c:
         c.execute("DELETE FROM plans WHERE id=?", (int(plan_id),))
@@ -1180,10 +1242,11 @@ def state(campaign_id):
         posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE campaign_id=? ORDER BY day, id", (campaign_id,))]
         days = wave_days(c, campaign_id, user_days(c))
         n_users = c.execute("SELECT count(*) FROM users").fetchone()[0]
+        roster = wave_roster(c, campaign_id)
     with _pending_lock:
         pending = [p["id"] for p in posts if p["id"] in _pending]
     return {"campaigns": campaigns, "posts": posts, "days": days, "pending": pending,
-            "users_total": n_users, "agencies": agencies_list()}
+            "users_total": n_users, "agencies": agencies_list(), "roster": roster}
 
 
 # ---------------------------------------------------------------- users → waves
@@ -1634,6 +1697,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/builder":
             with open(os.path.join(HERE, "static", "builder.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/outreach.js":
+            with open(os.path.join(HERE, "static", "outreach.js"), "rb") as f:
+                return self._send(200, f.read(), "text/javascript; charset=utf-8")
         if u.path == "/api/outreach":
             return self._send(200, outreach_history((q.get("key") or [None])[0]))
         if u.path == "/api/plans":
@@ -1732,6 +1798,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, save_plan(b.get("name"), b.get("items"), (b.get("notes") or "").strip() or None,
                                                  user.get("email"), b.get("id")))
             except (ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/plans/to_wave":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, plan_to_wave(b["id"], user.get("email")))
+            except (KeyError, ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/plans/delete":
             b = json.loads(self._body_bytes() or b"{}")

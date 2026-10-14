@@ -89,6 +89,11 @@ tr.in .add { background: var(--accent); border-color: var(--accent); color: var(
 .price.def { color: var(--muted); }
 .x { border: none; background: none; color: var(--muted); padding: 2px 6px; }
 .x:hover { color: var(--bad); background: none; }
+.mail { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 1px 6px; font-size: 12px; cursor: pointer; }
+.mail:hover { border-color: var(--accent); color: var(--accent); background: var(--surface); }
+.ost { display: block; font-size: 11px; color: var(--muted); } .ost.on { color: var(--good); }
+.wavebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); font-size: 13px; }
+.wavebar a { color: var(--accent); font-weight: 600; }
 .warns { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; margin: 0 0 12px; }
 .warns:empty { display: none; }
 .warns div + div { margin-top: 3px; }
@@ -128,6 +133,7 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
           <button id="saveBtn" class="primary">Save</button>
         </div>
         <p class="status" id="status" style="margin:6px 0 0"></p>
+        <div class="wavebar" id="waveBar"></div>
 
         <div class="row" style="margin-top:12px">
           <span class="muted" style="font-size:12.5px">Convert views with</span>
@@ -142,7 +148,7 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
         </div><div>
         <div class="table-wrap plan-list">
           <table>
-            <thead><tr><th></th><th>Creator</th><th>Exp. views</th><th>Price $</th><th>CPM</th><th>Exp. regs</th></tr></thead>
+            <thead><tr><th></th><th>Creator</th><th>Outreach</th><th>Exp. views</th><th>Price $</th><th>CPM</th><th>Exp. regs</th></tr></thead>
             <tbody id="plan"></tbody>
             <tfoot id="planFoot"></tfoot>
           </table>
@@ -218,6 +224,7 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
   </div>
 </div>
 
+<script src="/outreach.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -399,6 +406,9 @@ function renderPlan() {
     return `<tr>
       <td><button class="x" data-toggle="${esc(r.it.key)}" title="Remove">✕</button></td>
       <td>${r.c ? who(r.c) : "@" + esc(h)}</td>
+      <td style="text-align:left">${r.c ? `<button class="mail" data-msg="${esc(r.it.key)}" title="Write a DM">✉</button>` : ""}
+        ${r.c?.outreached ? `<span class="ost on" title="${esc(r.c.outreached_by || "")}">✓ ${r.c.outreach_from ? "from @" + esc(r.c.outreach_from) : "outreached"}</span>` : `<span class="ost">not contacted</span>`}
+        <span class="ost">${r.c?.paid_status === "paid" ? "paid" : "not paid"}</span></td>
       <td>${fmtN(r.views)}</td>
       <td><input class="price ${ok(r.it.price) ? "" : "def"}" data-price="${esc(r.it.key)}" inputmode="decimal"
         value="${ok(r.it.price) ? r.it.price : ""}" placeholder="${ok(r.c?.def_price) ? Math.round(r.c.def_price) : "—"}"
@@ -406,14 +416,52 @@ function renderPlan() {
       <td>${fmt$(r.cpm, 2)}</td>
       <td>${ok(r.regs) ? r.regs.toFixed(1) : "—"}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="6" class="empty">Add creators from the list.</td></tr>`;
-  $("planFoot").innerHTML = rows.length ? `<tr><td></td><td style="text-align:left;font-weight:650">Total</td><td>${fmtN(views)}</td>
+  }).join("") : `<tr><td colspan="7" class="empty">Add creators from the list.</td></tr>`;
+  $("planFoot").innerHTML = rows.length ? `<tr><td></td><td style="text-align:left;font-weight:650">Total</td>
+    <td style="text-align:left" class="muted">${rows.filter((r) => r.c?.outreached).length} / ${rows.length} contacted</td><td>${fmtN(views)}</td>
     <td>${fmt$(budget)}</td><td>${fmt$(cpm, 2)}</td><td>${ok(regs) ? Math.round(regs) : "—"}</td></tr>` : "";
+  renderWaveBar(rows);
   $("delBtn").disabled = !plan.id;
   $("dupBtn").disabled = !plan.id;
 }
 
 function render() { renderPicker(); renderPlan(); }
+
+// Plan → wave on the Waves page (the wave shows these creators with DM links + the account used)
+function renderWaveBar(rows) {
+  const saved = PLANS.find((p) => p.id === plan.id);
+  const todo = rows.filter((r) => r.c && !r.c.outreached).length;
+  const msgBtn = rows.length ? `<button id="msgAll" ${todo ? "" : "disabled"}>✉ Message ${todo ? todo + " not contacted" : "— all contacted"}</button>` : "";
+  $("waveBar").innerHTML = saved?.campaign_id
+    ? `<span>Wave created: <a href="/" data-wave="${saved.campaign_id}">${esc(saved.campaign_name || "open in Waves")} →</a></span><span style="flex:1"></span>${msgBtn}`
+    : `<span class="muted">Ready? Turn this plan into a wave — it shows on Waves with each creator's DM link and the account used.</span>
+       <span style="flex:1"></span>${msgBtn}<button id="toWave" class="primary" ${rows.length ? "" : "disabled"}>Create wave →</button>`;
+}
+$("waveBar").addEventListener("click", async (e) => {
+  const a = e.target.closest("[data-wave]");
+  if (a) { e.preventDefault(); try { localStorage.setItem("xca_campaign", a.dataset.wave); } catch (err) {} location.href = "/"; return; }
+  if (e.target.id === "msgAll") {
+    Outreach.open(plan.items.map((i) => byKey[i.key]).filter((c) => c && !c.outreached), { onDone: reload });
+    return;
+  }
+  if (e.target.id !== "toWave") return;
+  if (!plan.id || dirty) { await save(false); if (!plan.id || dirty) return; }
+  if (!confirm(`Create the wave "${plan.name}" on the Waves page with ${plan.items.length} creators?`)) return;
+  try {
+    const r = await api("/api/plans/to_wave", { id: plan.id });
+    PLANS = (await api("/api/plans")).plans;
+    renderPlan();
+    try { localStorage.setItem("xca_campaign", r.campaign_id); } catch (err) {}
+    $("status").textContent = `Wave created — open it on Waves`; $("status").className = "status";
+  } catch (err) { $("status").textContent = "Couldn't create the wave: " + err.message; $("status").className = "status dirty"; }
+});
+$("plan").addEventListener("click", (e) => { const b = e.target.closest("[data-msg]"); if (b) Outreach.open([byKey[b.dataset.msg]], { onDone: reload }); });
+// Fresh creators (outreach status) without touching the plan being edited
+async function reload() {
+  const cr = await api("/api/creators");
+  C = cr.creators.map(enrich); byKey = Object.fromEntries(C.map((c) => [c.key, c]));
+  render();
+}
 
 function renderPlans() {
   $("planSel").innerHTML = `<option value="">${plan.id ? "— new plan —" : "Unsaved plan"}</option>` + PLANS.map((p) =>
@@ -517,7 +565,10 @@ async function load() {
     waves.map((w) => `<option value="${w.id}">${esc(w.name)} (${ok(w.regs_per_1k_views) ? w.regs_per_1k_views.toFixed(2) : "—"} / 1K)</option>`).join("");
   if (saved && [...$("bench").options].some((o) => o.value === saved)) $("bench").value = saved;
   sort = store.get("xca_bsort2") || sort;
+  const want = new URLSearchParams(location.search).get("plan");
+  const linked = want && PLANS.find((p) => String(p.id) === want);
   const draft = store.get("xca_plan_draft");
+  if (linked) { openPlan(linked); history.replaceState(null, "", "/builder"); return; }
   if (draft && Array.isArray(draft.items)) {
     plan = draft; $("name").value = plan.name || ""; $("notes").value = plan.notes || "";
     const saved = PLANS.find((p) => p.id === plan.id);
