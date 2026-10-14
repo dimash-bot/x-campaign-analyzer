@@ -70,6 +70,10 @@ The app exposes an MCP server at `https://<your-railway-domain>/mcp`, so Claude 
   `https://<your-railway-domain>/mcp`. Claude opens the app's sign-in (Google, @nace.ai) and an Allow screen.
 - **Claude Code**: `claude mcp add --transport http campaigns https://<your-railway-domain>/mcp`, then `/mcp` to sign in.
 
+**Wave builder** (`/builder`): pick creators from Influencers into a draft wave; it sums their expected views (our paid
+posts, else their median), prices (typed, quote, or past pay) and projects registrations / API users from past waves.
+Drafts are saved for the whole team.
+
 Tools: `list_campaigns`, `create_campaign`, `rename_campaign`, `add_posts`, `update_post`, `remove_post`,
 `set_other_spend`, `refresh_metrics`, `import_users`, `get_report`, `get_posts`.
 

@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave Builder</title>
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee; --border: #e3e3de;
+  --text: #1a1a18; --muted: #6b6b66; --accent: #1d6fe0; --accent-ink: #fff; --accent-soft: #e8f0fc;
+  --good: #16794a; --bad: #b42318; --warn: #a15c00; --warn-bg: #fff6e6; --warn-border: #f0d9a8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
+    --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a; --accent-soft: #1c2a40;
+    --good: #4cc38a; --bad: #ff7a6b; --warn: #f0b456; --warn-bg: #2e2412; --warn-border: #5a4520;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.wrap { max-width: 1440px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+nav a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 7px; font-weight: 500; }
+nav a.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.me { color: var(--muted); font-size: 12.5px; }
+.me a { color: inherit; }
+select, input, button, textarea { font: inherit; color: inherit; }
+select, input, textarea { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+button { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover { background: var(--surface-2); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1 1 160px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+.plan-col { position: sticky; top: 12px; }
+@media (max-width: 1000px) { .plan-col { position: static; } }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 12px 0; }
+.kpi { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.kpi .l { color: var(--muted); font-size: 11.5px; }
+.kpi .v { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 1px; letter-spacing: -0.01em; }
+.kpi .s { color: var(--muted); font-size: 11px; margin-top: 1px; }
+.kpi.hl { background: var(--accent-soft); }
+.kpi.hl .v { color: var(--accent); }
+.kpi .s.up { color: var(--good); } .kpi .s.down { color: var(--bad); }
+.table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
+.picker { max-height: 70vh; overflow: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--text); }
+th.sorted { color: var(--accent); }
+th:nth-child(2), td:nth-child(2) { text-align: left; }
+th:first-child, td:first-child { text-align: center; width: 34px; }
+tr.in td { background: var(--accent-soft); }
+.who { display: flex; gap: 8px; align-items: center; }
+.who img, .who .ph { width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2); flex: none; object-fit: cover; }
+.who b { font-weight: 600; } .who small { display: block; color: var(--muted); font-size: 11.5px; }
+.who a { color: inherit; text-decoration: none; }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
+.badge.good { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.badge.bad { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+.badge.test { background: var(--warn-bg); color: var(--warn); }
+.muted { color: var(--muted); }
+.src { color: var(--muted); font-size: 11px; display: block; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-size: 12px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.add { width: 26px; height: 26px; padding: 0; border-radius: 7px; font-weight: 700; line-height: 1; }
+tr.in .add { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.price { width: 86px; text-align: right; padding: 4px 6px; }
+.price.def { color: var(--muted); }
+.x { border: none; background: none; color: var(--muted); padding: 2px 6px; }
+.x:hover { color: var(--bad); background: none; }
+.warns { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; margin: 0 0 12px; }
+.warns:empty { display: none; }
+.warns div + div { margin-top: 3px; }
+.mix { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: var(--surface-2); margin: 4px 0 2px; }
+.mix span { display: block; height: 100%; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+.status { font-size: 12px; color: var(--muted); }
+.status.dirty { color: var(--warn); }
+.how { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.how summary { cursor: pointer; }
+.how p { margin: 6px 0; }
+textarea { width: 100%; min-height: 54px; resize: vertical; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <h1>X Campaign Analyzer</h1>
+      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/agencies">Agencies</a><a href="/builder" class="on">Wave builder</a></nav>
+    </div>
+    <span class="me" id="me"></span>
+  </header>
+
+  <div class="layout">
+    <!-- Left: everyone we've collected -->
+    <section class="card">
+      <h2>Creators</h2>
+      <p class="sub">Everyone on Influencers. Click <b>+</b> to put a creator in the plan. Expected views come from their
+        paid posts with us when we have them, otherwise from their own median.</p>
+      <div class="row" style="margin-bottom:10px">
+        <input id="q" class="grow" placeholder="Search handle or name" autocomplete="off">
+        <select id="fVerdict" title="Quality verdict">
+          <option value="">Any quality</option><option value="good">Good</option><option value="test">Test</option>
+          <option value="partial">Profile only</option><option value="bad">Bad</option>
+        </select>
+        <select id="fHist" title="Have we paid them before?">
+          <option value="">New + repeat</option><option value="repeat">Paid before</option><option value="new">Never paid</option>
+        </select>
+      </div>
+      <div class="chips" id="quick" style="margin-bottom:10px">
+        <span class="chip" data-quick="good">+ All good</span>
+        <span class="chip" data-quick="top10">+ Top 10 by expected CPM</span>
+      </div>
+      <div class="table-wrap picker">
+        <table>
+          <thead><tr>
+            <th></th><th data-sort="handle">Creator</th><th data-sort="qrank">Quality</th><th data-sort="followers">Followers</th>
+            <th data-sort="exp_views">Exp. views</th><th data-sort="exp_er">ER</th><th data-sort="def_price">Price</th>
+            <th data-sort="exp_cpm">Exp. CPM</th><th data-sort="posts">Paid posts</th>
+          </tr></thead>
+          <tbody id="pick"></tbody>
+        </table>
+      </div>
+      <p class="status" id="pickCount" style="margin:8px 0 0"></p>
+    </section>
+
+    <!-- Right: the wave being built -->
+    <section class="plan-col">
+      <div class="card">
+        <div class="row" style="margin-bottom:8px">
+          <select id="planSel" class="grow" title="Saved plans (shared with the team)"></select>
+          <button id="newBtn">New</button>
+          <button id="dupBtn" title="Save a copy under a new name">Duplicate</button>
+          <button id="delBtn" class="danger">Delete</button>
+        </div>
+        <div class="row">
+          <input id="name" class="grow" placeholder="Plan name, e.g. wave 8 - drex 2.1">
+          <button id="saveBtn" class="primary">Save</button>
+        </div>
+        <p class="status" id="status" style="margin:6px 0 0"></p>
+
+        <div class="row" style="margin-top:12px">
+          <span class="muted" style="font-size:12.5px">Convert views with</span>
+          <select id="bench" class="grow" title="Which past results to use for registrations and API users"></select>
+        </div>
+
+        <section class="kpis" id="kpis"></section>
+        <div id="mix"></div>
+        <div class="warns" id="warns"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>Creator</th><th>Exp. views</th><th>Price $</th><th>CPM</th><th>Exp. regs</th></tr></thead>
+            <tbody id="plan"></tbody>
+            <tfoot id="planFoot"></tfoot>
+          </table>
+        </div>
+        <textarea id="notes" placeholder="Notes (deal terms, timing, agency…)" style="margin-top:12px"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button id="csvBtn">Export CSV</button>
+          <button id="clearBtn">Clear plan</button>
+        </div>
+        <details class="how">
+          <summary>How the numbers are estimated</summary>
+          <p><b>Expected views</b>: average views of their paid posts with us; if we haven't paid them, the median of
+            their recent posts. <b>Price</b>: what you type, else their quoted price, else what we paid per post before.</p>
+          <p><b>Registrations</b> = expected views × registrations per 1K views of the waves you pick above.
+            <b>API users</b> = registrations × that benchmark's reg → API rate. These assume the new wave converts
+            like the benchmark did — treat them as a range, not a promise.</p>
+          <p>Creators missing views or a price are left out of CPM and cost per registration (shown as a warning).</p>
+        </details>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ok = (n) => n != null && isFinite(n);
+const fmtN = (n) => !ok(n) ? "—" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
+const fmt$ = (n, d = 0) => !ok(n) ? "—" : "$" + n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (n, d = 2) => !ok(n) ? "—" : n.toFixed(d) + "%";
+const QRANK = { good: 3, test: 2, partial: 1, bad: 0 };
+const QLABEL = { good: "Good", test: "Test", partial: "Profile only", bad: "Bad" };
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+  return j;
+}
+
+let C = [], byKey = {}, R = null, PLANS = [];
+// The plan being edited: {id, name, notes, items: [{key, price}]}
+let plan = { id: null, name: "", notes: "", items: [] }, dirty = false;
+let sort = { key: "exp_cpm", dir: "asc" };
+const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+// Per-creator estimate from what we already know about them.
+function enrich(c) {
+  const ours = c.posts > 0 && ok(c.avg_views) && c.avg_views > 0;
+  c.exp_views = ours ? c.avg_views : ok(c.median_views) ? c.median_views : null;
+  c.views_src = ours ? `avg of ${c.posts} paid post${c.posts === 1 ? "" : "s"}` : ok(c.median_views) ? "their median" : "no data";
+  c.exp_er = ok(c.er_pct) ? c.er_pct : ok(c.median_er) ? c.median_er : null;
+  c.past_price = c.paid && c.posts ? c.paid / c.posts : null;
+  c.def_price = ok(c.quote_price) && c.quote_price > 0 ? c.quote_price : c.past_price;
+  c.price_src = ok(c.quote_price) && c.quote_price > 0 ? "quote" : ok(c.past_price) ? "paid before" : "";
+  c.exp_cpm = ok(c.def_price) && c.exp_views ? c.def_price / c.exp_views * 1000 : null;
+  c.qrank = QRANK[c.quality?.verdict] ?? 1;
+  return c;
+}
+
+function benchmark() {
+  if (!R) return null;
+  const v = $("bench").value;
+  const src = v === "all" ? R.totals : R.campaigns.find((w) => String(w.id) === v);
+  if (!src) return null;
+  return { name: v === "all" ? "all waves" : src.name, r1k: src.regs_per_1k_views, r2a: src.reg_to_api_pct,
+           cpr: src.cost_per_registration, cpa: src.cost_per_api_user, cpm: src.avg_cpm };
+}
+
+const priceOf = (it) => ok(it.price) ? it.price : byKey[it.key]?.def_price;
+const inPlan = (k) => plan.items.some((i) => i.key === k);
+
+function setDirty(d = true) {
+  dirty = d;
+  store.set("xca_plan_draft", plan);
+  const s = $("status");
+  s.className = "status" + (dirty ? " dirty" : "");
+  const saved = PLANS.find((p) => p.id === plan.id);
+  s.textContent = dirty ? (plan.id ? "Unsaved changes" : "Not saved yet — name it and click Save")
+    : saved ? `Saved · ${saved.updated_by || saved.created_by || ""} · ${new Date(saved.updated_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "";
+}
+
+function renderPicker() {
+  const q = $("q").value.trim().toLowerCase(), fv = $("fVerdict").value, fh = $("fHist").value;
+  let V = C.filter((c) => (!q || (c.handle + " " + c.name).toLowerCase().includes(q))
+    && (!fv || (c.quality?.verdict || "partial") === fv)
+    && (!fh || (fh === "new" ? !c.posts : c.posts > 0)));
+  const d = sort.dir === "asc" ? 1 : -1;
+  V.sort((a, b) => {
+    const x = a[sort.key], y = b[sort.key];
+    if (!ok(x) && typeof x !== "string") return 1;
+    if (!ok(y) && typeof y !== "string") return -1;
+    return (typeof x === "string" ? x.localeCompare(y) : x - y) * d;
+  });
+  document.querySelectorAll("th[data-sort]").forEach((th) => th.classList.toggle("sorted", th.dataset.sort === sort.key));
+  $("pick").innerHTML = V.length ? V.map((c) => {
+    const v = c.quality?.verdict || "partial", on = inPlan(c.key);
+    return `<tr class="${on ? "in" : ""}">
+      <td><button class="add" data-toggle="${esc(c.key)}" title="${on ? "Remove from plan" : "Add to plan"}">${on ? "✓" : "+"}</button></td>
+      <td>${who(c)}</td>
+      <td><span class="badge ${v}" title="${esc([...(c.quality?.kills || []), ...(c.quality?.flags || [])].join("\n"))}">${QLABEL[v]}</span></td>
+      <td>${fmtN(c.followers)}</td>
+      <td>${fmtN(c.exp_views)}<span class="src">${esc(c.views_src)}</span></td>
+      <td>${pct(c.exp_er)}</td>
+      <td>${fmt$(c.def_price)}<span class="src">${esc(c.price_src)}</span></td>
+      <td>${fmt$(c.exp_cpm, 2)}</td>
+      <td>${c.posts || "—"}${c.waves.length ? `<span class="src" title="${esc(c.waves.join(", "))}">${c.waves.length} wave${c.waves.length === 1 ? "" : "s"}</span>` : ""}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="9" class="empty">No creators match.</td></tr>`;
+  $("pickCount").textContent = `${V.length} of ${C.length} creators shown · ${plan.items.length} in the plan`;
+}
+
+function who(c) {
+  const link = c.platform === "x" ? `https://x.com/${encodeURIComponent(c.handle)}` : null;
+  const img = c.avatar ? `<img src="${esc(c.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="ph"></span>`;
+  const name = `<b>${esc(c.name || c.handle)}</b><small>@${esc(c.handle)}${c.outreached ? " · outreached" : ""}</small>`;
+  return `<div class="who">${img}<div>${link ? `<a href="${link}" target="_blank" rel="noopener">${name}</a>` : name}</div></div>`;
+}
+
+function renderPlan() {
+  const B = benchmark();
+  const rows = plan.items.map((it) => {
+    const c = byKey[it.key];
+    const price = priceOf(it), views = c?.exp_views ?? null;
+    const regs = B && ok(B.r1k) && views ? views / 1000 * B.r1k : null;
+    return { it, c, price, views, regs, cpm: ok(price) && views ? price / views * 1000 : null };
+  });
+
+  // Totals over the plan
+  const sum = (f) => rows.reduce((s, r) => s + (ok(f(r)) ? f(r) : 0), 0);
+  const priced = rows.filter((r) => ok(r.price) && r.views);
+  const budget = sum((r) => r.price), views = sum((r) => r.views);
+  const followers = sum((r) => r.c?.followers);
+  const eng = sum((r) => r.views && ok(r.c?.exp_er) ? r.views * r.c.exp_er / 100 : null);
+  const pricedBudget = priced.reduce((s, r) => s + r.price, 0), pricedViews = priced.reduce((s, r) => s + r.views, 0);
+  const cpm = pricedViews ? pricedBudget / pricedViews * 1000 : null;
+  const regs = B && ok(B.r1k) ? views / 1000 * B.r1k : null;
+  const api = ok(regs) && B && ok(B.r2a) ? regs * B.r2a / 100 : null;
+  const pricedRegs = B && ok(B.r1k) ? pricedViews / 1000 * B.r1k : null;
+  const cpr = pricedRegs ? pricedBudget / pricedRegs : null;
+  const cpa = pricedRegs && ok(B?.r2a) && B.r2a ? pricedBudget / (pricedRegs * B.r2a / 100) : null;
+
+  const vs = (val, ref, lowerBetter = true) => {
+    if (!ok(val) || !ok(ref) || !ref) return "";
+    const d = (val / ref - 1) * 100;
+    const good = lowerBetter ? d < 0 : d > 0;
+    return `<span class="${Math.abs(d) < 3 ? "" : good ? "up" : "down"}">${d > 0 ? "+" : ""}${d.toFixed(0)}% vs ${esc(B.name)}</span>`;
+  };
+  const k = (l, v, s = "", cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  const kS = (l, v, sHtml, cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sHtml}</div></div>`;
+  $("kpis").innerHTML = [
+    k("Creators", plan.items.length, `${rows.filter((r) => r.c && !r.c.posts).length} new · ${rows.filter((r) => r.c?.posts).length} repeat`),
+    k("Budget", fmt$(budget), `${fmt$(plan.items.length ? budget / plan.items.length : null)} avg / creator`),
+    k("Followers", fmtN(followers), "combined, may overlap"),
+    k("Expected views", fmtN(views), `${fmtN(eng)} engagements`),
+    kS("Expected CPM", fmt$(cpm, 2), vs(cpm, B?.cpm)),
+    k("Expected regs", ok(regs) ? Math.round(regs).toLocaleString() : "—", B && ok(B.r1k) ? `${B.r1k.toFixed(2)} per 1K views` : "", "hl"),
+    kS("$ / registration", fmt$(cpr, 2), vs(cpr, B?.cpr), "hl"),
+    k("Expected API users", ok(api) ? Math.round(api).toLocaleString() : "—", B && ok(B.r2a) ? `${B.r2a.toFixed(1)}% of regs` : ""),
+    kS("$ / API user", fmt$(cpa, 2), vs(cpa, B?.cpa), "hl"),
+  ].join("");
+
+  // Quality mix bar
+  const mix = { good: 0, test: 0, partial: 0, bad: 0 };
+  rows.forEach((r) => { mix[r.c?.quality?.verdict || "partial"]++; });
+  const col = { good: "var(--good)", test: "var(--warn)", partial: "var(--border)", bad: "var(--bad)" };
+  const n = plan.items.length;
+  const bots = rows.map((r) => r.c?.bot_followers_pct).filter(ok);
+  $("mix").innerHTML = n ? `<div class="mix">${Object.entries(mix).filter(([, v]) => v).map(([q, v]) => `<span style="width:${v / n * 100}%;background:${col[q]}" title="${QLABEL[q]}: ${v}"></span>`).join("")}</div>
+    <div class="status">${Object.entries(mix).filter(([, v]) => v).map(([q, v]) => `${v} ${QLABEL[q].toLowerCase()}`).join(" · ")}${bots.length ? ` · avg bot followers ${(bots.reduce((a, b) => a + b, 0) / bots.length).toFixed(0)}%` : ""} · ${rows.filter((r) => r.c?.outreached).length} outreached</div>` : "";
+
+  // Warnings
+  const W = [];
+  const noViews = rows.filter((r) => !r.views), noPrice = rows.filter((r) => !ok(r.price));
+  const bad = rows.filter((r) => r.c?.quality?.verdict === "bad"), gone = rows.filter((r) => !r.c);
+  if (bad.length) W.push(`⚠ ${bad.length} rated bad: ${bad.map((r) => "@" + esc(r.c.handle)).join(", ")}`);
+  if (noViews.length) W.push(`No views data for ${noViews.map((r) => "@" + esc(r.c?.handle || r.it.key.split(":")[1])).join(", ")} — left out of expected views`);
+  if (noPrice.length) W.push(`No price for ${noPrice.map((r) => "@" + esc(r.c?.handle || r.it.key.split(":")[1])).join(", ")} — type one in`);
+  if (gone.length) W.push(`${gone.length} creator${gone.length === 1 ? " is" : "s are"} no longer on Influencers`);
+  if (B && !ok(B.r1k)) W.push(`${esc(B.name)} has no registrations yet — pick another benchmark`);
+  $("warns").innerHTML = W.map((w) => `<div>${w}</div>`).join("");
+
+  $("plan").innerHTML = rows.length ? rows.map((r) => {
+    const h = r.c?.handle || r.it.key.split(":")[1];
+    return `<tr>
+      <td><button class="x" data-toggle="${esc(r.it.key)}" title="Remove">✕</button></td>
+      <td>${r.c ? who(r.c) : "@" + esc(h)}</td>
+      <td>${fmtN(r.views)}</td>
+      <td><input class="price ${ok(r.it.price) ? "" : "def"}" data-price="${esc(r.it.key)}" inputmode="decimal"
+        value="${ok(r.it.price) ? r.it.price : ""}" placeholder="${ok(r.c?.def_price) ? Math.round(r.c.def_price) : "—"}"
+        title="${ok(r.it.price) ? "Planned price" : r.c?.price_src ? "Using " + r.c.price_src + " — type to override" : "Type the price"}"></td>
+      <td>${fmt$(r.cpm, 2)}</td>
+      <td>${ok(r.regs) ? r.regs.toFixed(1) : "—"}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">Add creators from the list.</td></tr>`;
+  $("planFoot").innerHTML = rows.length ? `<tr><td></td><td style="text-align:left;font-weight:650">Total</td><td>${fmtN(views)}</td>
+    <td>${fmt$(budget)}</td><td>${fmt$(cpm, 2)}</td><td>${ok(regs) ? Math.round(regs) : "—"}</td></tr>` : "";
+  $("delBtn").disabled = !plan.id;
+  $("dupBtn").disabled = !plan.id;
+}
+
+function render() { renderPicker(); renderPlan(); }
+
+function renderPlans() {
+  $("planSel").innerHTML = `<option value="">${plan.id ? "— new plan —" : "Unsaved plan"}</option>` + PLANS.map((p) =>
+    `<option value="${p.id}" ${p.id === plan.id ? "selected" : ""}>${esc(p.name)} (${p.items.length})</option>`).join("");
+}
+
+function toggle(key) {
+  if (inPlan(key)) plan.items = plan.items.filter((i) => i.key !== key);
+  else plan.items.push({ key, price: null });
+  setDirty(); render();
+}
+
+function openPlan(p) {
+  plan = p ? { id: p.id, name: p.name, notes: p.notes || "", items: p.items.map((i) => ({ ...i })) } : { id: null, name: "", notes: "", items: [] };
+  $("name").value = plan.name; $("notes").value = plan.notes;
+  setDirty(false); renderPlans(); render();
+}
+
+// --- events
+$("pick").addEventListener("click", (e) => { const b = e.target.closest("[data-toggle]"); if (b) toggle(b.dataset.toggle); });
+$("plan").addEventListener("click", (e) => { const b = e.target.closest("[data-toggle]"); if (b) toggle(b.dataset.toggle); });
+$("plan").addEventListener("change", (e) => {
+  const el = e.target.closest("[data-price]");
+  if (!el) return;
+  const it = plan.items.find((i) => i.key === el.dataset.price);
+  const v = el.value.replace(/[$,\s]/g, "");
+  it.price = v === "" ? null : Math.max(0, Number(v)) || 0;
+  setDirty(); renderPlan();
+});
+document.querySelectorAll("th[data-sort]").forEach((th) => th.addEventListener("click", () => {
+  const k = th.dataset.sort;
+  sort = sort.key === k ? { key: k, dir: sort.dir === "asc" ? "desc" : "asc" }
+    : { key: k, dir: ["handle", "exp_cpm", "def_price"].includes(k) ? "asc" : "desc" };
+  store.set("xca_bsort", sort); renderPicker();
+}));
+["q", "fVerdict", "fHist"].forEach((id) => $(id).addEventListener("input", renderPicker));
+$("bench").addEventListener("change", () => { store.set("xca_bench", $("bench").value); renderPlan(); });
+$("name").addEventListener("input", () => { plan.name = $("name").value; setDirty(); });
+$("notes").addEventListener("input", () => { plan.notes = $("notes").value; setDirty(); });
+$("quick").addEventListener("click", (e) => {
+  const q = e.target.closest("[data-quick]")?.dataset.quick;
+  if (!q) return;
+  const pickable = C.filter((c) => !inPlan(c.key));
+  const add = q === "good" ? pickable.filter((c) => c.quality?.verdict === "good")
+    : pickable.filter((c) => ok(c.exp_cpm) && c.quality?.verdict !== "bad").sort((a, b) => a.exp_cpm - b.exp_cpm).slice(0, 10);
+  add.forEach((c) => plan.items.push({ key: c.key, price: null }));
+  setDirty(); render();
+});
+$("planSel").addEventListener("change", () => {
+  if (dirty && plan.items.length && !confirm("Discard unsaved changes to this plan?")) { renderPlans(); return; }
+  openPlan(PLANS.find((p) => String(p.id) === $("planSel").value));
+});
+$("newBtn").onclick = () => {
+  if (dirty && plan.items.length && !confirm("Discard unsaved changes to this plan?")) return;
+  openPlan(null); $("name").focus();
+};
+async function save(asNew) {
+  const name = asNew ? prompt("Name for the copy", plan.name + " (copy)") : $("name").value.trim();
+  if (!name) { if (!asNew) { $("name").focus(); $("status").textContent = "Give the plan a name first"; $("status").className = "status dirty"; } return; }
+  $("saveBtn").disabled = true;
+  try {
+    const r = await api("/api/plans/save", { id: asNew ? null : plan.id, name, notes: $("notes").value, items: plan.items });
+    plan.id = r.id; plan.name = name; $("name").value = name;
+    PLANS = (await api("/api/plans")).plans;
+    setDirty(false); renderPlans(); renderPlan();
+  } catch (e) { $("status").textContent = "Couldn't save: " + e.message; $("status").className = "status dirty"; }
+  finally { $("saveBtn").disabled = false; }
+}
+$("saveBtn").onclick = () => save(false);
+$("dupBtn").onclick = () => save(true);
+$("delBtn").onclick = async () => {
+  if (!plan.id || !confirm(`Delete plan "${plan.name}" for everyone?`)) return;
+  await api("/api/plans/delete", { id: plan.id });
+  PLANS = (await api("/api/plans")).plans;
+  openPlan(null);
+};
+$("clearBtn").onclick = () => { if (plan.items.length && confirm("Remove all creators from this plan?")) { plan.items = []; setDirty(); render(); } };
+$("csvBtn").onclick = () => {
+  const B = benchmark();
+  const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = [["handle", "name", "platform", "quality", "followers", "expected_views", "views_source", "er_pct", "price", "price_source", "cpm", "expected_regs", "paid_posts_before", "outreached"].join(",")];
+  for (const it of plan.items) {
+    const c = byKey[it.key] || { handle: it.key.split(":")[1] }, price = priceOf(it), v = c.exp_views;
+    lines.push([c.handle, c.name, c.platform, c.quality?.verdict, c.followers, v && Math.round(v), c.views_src, c.exp_er,
+      price, ok(it.price) ? "planned" : c.price_src, ok(price) && v ? (price / v * 1000).toFixed(2) : "",
+      B && ok(B.r1k) && v ? (v / 1000 * B.r1k).toFixed(1) : "", c.posts, c.outreached ? "yes" : ""].map(q).join(","));
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+  a.download = (plan.name || "wave-plan").replace(/[^\w.-]+/g, "_") + ".csv";
+  a.click();
+};
+window.addEventListener("beforeunload", (e) => { if (dirty && plan.items.length) { e.preventDefault(); e.returnValue = ""; } });
+
+async function load() {
+  const [cr, rep, pl] = await Promise.all([api("/api/creators"), api("/api/report"), api("/api/plans")]);
+  C = cr.creators.map(enrich); byKey = Object.fromEntries(C.map((c) => [c.key, c])); R = rep; PLANS = pl.plans;
+  const waves = R.campaigns.filter((w) => w.registrations);
+  const saved = store.get("xca_bench");
+  $("bench").innerHTML = `<option value="all">All waves (${ok(R.totals.regs_per_1k_views) ? R.totals.regs_per_1k_views.toFixed(2) : "—"} regs / 1K views)</option>` +
+    waves.map((w) => `<option value="${w.id}">${esc(w.name)} (${ok(w.regs_per_1k_views) ? w.regs_per_1k_views.toFixed(2) : "—"} / 1K)</option>`).join("");
+  if (saved && [...$("bench").options].some((o) => o.value === saved)) $("bench").value = saved;
+  sort = store.get("xca_bsort") || sort;
+  const draft = store.get("xca_plan_draft");
+  if (draft && Array.isArray(draft.items)) {
+    plan = draft; $("name").value = plan.name || ""; $("notes").value = plan.notes || "";
+    const saved = PLANS.find((p) => p.id === plan.id);
+    setDirty(saved ? JSON.stringify(saved.items) !== JSON.stringify(plan.items) || saved.name !== plan.name || (saved.notes || "") !== (plan.notes || "")
+      : plan.items.length > 0);
+  } else setDirty(false);
+  renderPlans(); render();
+}
+api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
+load().catch((e) => { $("pick").innerHTML = `<tr><td colspan="9" class="empty">Couldn't load: ${esc(e.message)}</td></tr>`; });
+</script>
+</body>
+</html>

@@ -106,6 +106,10 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS agencies (
             id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, contact TEXT, notes TEXT,
             created_at TEXT, created_by TEXT)""")
+        # Wave builder drafts: a named set of creators with planned prices, shared by the team.
+        c.execute("""CREATE TABLE IF NOT EXISTS plans (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', notes TEXT,
+            created_at TEXT, created_by TEXT, updated_at TEXT, updated_by TEXT)""")
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
         # Signup export rows. When present they are the source of truth for daily registrations / API users.
@@ -1021,6 +1025,50 @@ def restore(data: bytes):
 
 # ---------------------------------------------------------------- data views
 
+def plans_list():
+    with db() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM plans ORDER BY updated_at DESC, id DESC")]
+    for r in rows:
+        r["items"] = json.loads(r["items"] or "[]")
+    return {"plans": rows}
+
+
+def save_plan(name, items, notes=None, email=None, plan_id=None):
+    """Create or update a wave-builder draft. items = [{"key": "x:handle", "price": 500 | null}, ...]."""
+    name = (name or "").strip()[:120]
+    if not name:
+        raise ValueError("plan name is required")
+    clean, seen = [], set()
+    for it in items or []:
+        k = str((it or {}).get("key") or "").strip()
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        price = it.get("price")
+        try:
+            price = None if price in (None, "") else max(0.0, float(price))
+        except (TypeError, ValueError):
+            price = None
+        clean.append({"key": k, "price": price})
+    blob = json.dumps(clean)
+    with _db_lock, db() as c:
+        if plan_id:
+            n = c.execute("UPDATE plans SET name=?, items=?, notes=?, updated_at=?, updated_by=? WHERE id=?",
+                          (name, blob, notes, now(), email, int(plan_id))).rowcount
+            if not n:
+                raise ValueError("plan not found")
+            return {"id": int(plan_id), "name": name, "items": len(clean)}
+        cur = c.execute("INSERT INTO plans(name, items, notes, created_at, created_by, updated_at, updated_by) VALUES (?,?,?,?,?,?,?)",
+                        (name, blob, notes, now(), email, now(), email))
+        return {"id": cur.lastrowid, "name": name, "items": len(clean)}
+
+
+def delete_plan(plan_id):
+    with _db_lock, db() as c:
+        c.execute("DELETE FROM plans WHERE id=?", (int(plan_id),))
+    return {"deleted": int(plan_id)}
+
+
 def agencies_list():
     with db() as c:
         return [dict(r) for r in c.execute("SELECT id, name FROM agencies ORDER BY name")]
@@ -1483,6 +1531,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/html; charset=utf-8")
         if u.path == "/api/agencies":
             return self._send(200, agencies_view())
+        if u.path == "/builder":
+            with open(os.path.join(HERE, "static", "builder.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/api/plans":
+            return self._send(200, plans_list())
         if u.path == "/api/report":
             return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
@@ -1571,6 +1624,19 @@ class Handler(BaseHTTPRequestHandler):
                                                    (b.get("notes") or "").strip() or None, user.get("email"), b.get("id")))
             except (ValueError, sqlite3.IntegrityError) as e:
                 return self._send(400, {"error": "an agency with that name already exists" if isinstance(e, sqlite3.IntegrityError) else str(e)})
+        if path == "/api/plans/save":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, save_plan(b.get("name"), b.get("items"), (b.get("notes") or "").strip() or None,
+                                                 user.get("email"), b.get("id")))
+            except (ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/plans/delete":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, delete_plan(b["id"]))
+            except (KeyError, ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/agencies/delete":
             b = json.loads(self._body_bytes() or b"{}")
             try:
