@@ -136,6 +136,11 @@ TOOLS = [
          "outreached": {"type": "boolean", "description": "true = we've reached out (default), false = clear the tick"},
          "sender": {"type": "string", "description": "our X account they were contacted from, e.g. naceai"},
          "platform": {"type": "string", "enum": ["x", "linkedin", "other"], "description": "default x"}}}},
+    {"name": "reanalyze_creators",
+     "description": "Re-analyze several X influencers at once: fresh profile, their recent posts (median views / ER) and the "
+                    "bot-follower check. Runs in the background (~$0.05 Apify per account); read results with get_creators later.",
+     "inputSchema": {"type": "object", "required": ["creators"], "properties": {
+         "creators": {"type": "array", "items": {"type": "string"}, "description": "X handles, e.g. dravenip (max 100)"}}}},
     {"name": "set_paid_status",
      "description": "Mark influencers paid or not paid (the Paid column on Influencers). 'auto' goes back to the default: "
                     "paid once they have a paid post with us.",
@@ -222,6 +227,8 @@ def call_tool(app, user, name, args):
         keys = [app.creator_key(args.get("platform") or "x", str(h).lstrip("@")) for h in args.get("creators") or []]
         email = user if isinstance(user, str) else (user or {}).get("email")
         return app.set_outreached(keys, args.get("outreached", True), email, args.get("sender"))
+    if name == "reanalyze_creators":
+        return app.reanalyze_creators([app.creator_key("x", str(h).lstrip("@")) for h in args.get("creators") or []])
     if name == "set_paid_status":
         keys = [app.creator_key(args.get("platform") or "x", str(h).lstrip("@")) for h in args.get("creators") or []]
         email = user if isinstance(user, str) else (user or {}).get("email")

@@ -635,6 +635,31 @@ def start_followers(key, handle, force=False):
     threading.Thread(target=follower_check, args=(key, handle), daemon=True).start()
 
 
+REANALYZE_MAX = 100
+
+
+def reanalyze_creators(keys):
+    """Re-pull everything for the chosen X creators at once: profile (free), their last posts and the follower bot
+    check (Apify, forced even if done recently). Apify pulls run 3 at a time in the background; rows show
+    'analyzing…' until done."""
+    keys = [k for k in dict.fromkeys(keys or []) if isinstance(k, str) and k.startswith("x:")]
+    if not keys:
+        raise ValueError("pick X creators to re-analyze")
+    if len(keys) > REANALYZE_MAX:
+        raise ValueError(f"at most {REANALYZE_MAX} at a time")
+    with db() as c:
+        qs = ",".join("?" * len(keys))
+        handles = {r["key"]: r["handle"] for r in c.execute(f"SELECT key, handle FROM creators WHERE key IN ({qs})", keys)}
+    apify = apify_client.enabled()
+    for k in keys:
+        h = handles.get(k) or k.split(":", 1)[1]
+        enqueue(k, k, "creator", h)
+        if apify:
+            start_apify(k, h, force=True)
+            start_followers(k, h, force=True)
+    return {"queued": len(keys), "apify": apify}
+
+
 def backfill_creators():
     """On start: every X creator missing their normal (median views / ER) or a follower check gets one."""
     if not apify_client.enabled():
@@ -1830,6 +1855,12 @@ class Handler(BaseHTTPRequestHandler):
             if not keys:
                 return self._send(400, {"error": "no creators given"})
             return self._send(200, delete_creators(keys))
+        if path == "/api/creators/reanalyze":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, reanalyze_creators(b.get("keys") or [b.get("key")]))
+            except (ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/creators/refresh":
             if not can_refresh(user):
                 return self._send(403, {"error": "only admins can refresh all profiles"})

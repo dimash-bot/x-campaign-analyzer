@@ -193,6 +193,7 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
       </span>
       <span style="flex:1"></span>
       <button id="refresh" hidden title="Re-fetch followers and recent posts from X (admins only)">↻ Refresh profiles</button>
+      <button id="reSel" hidden title="Re-pull profile, recent posts and follower bot check for every selected creator at once">↻ Re-analyze selected</button>
       <button id="outSel" hidden title="Tick 'Outreached' for every selected creator">Mark outreached</button>
       <button id="delSel" class="danger" hidden>Delete selected</button>
       <button id="addBtn" class="primary" title="Paste a list of X accounts to check their quality before paying them">+ Add influencers</button>
@@ -455,6 +456,8 @@ function syncPicked() {
   $("selAll").indeterminate = !$("selAll").checked && shown.some((c) => picked.has(c.key));
   $("delSel").hidden = !picked.size;
   $("outSel").hidden = !picked.size;
+  $("reSel").hidden = !picked.size;
+  $("reSel").textContent = `↻ Re-analyze ${picked.size}`;
   $("outSel").textContent = `Mark ${picked.size} outreached`;
   $("delSel").textContent = `Delete ${picked.size} selected`;
 }
@@ -468,6 +471,21 @@ $("selAll").addEventListener("change", (e) => {
   for (const c of visible()) e.target.checked ? picked.add(c.key) : picked.delete(c.key);
   render();
 });
+// Re-analyze the ticked creators together: fresh profile + last posts + follower bot check (runs in the background)
+$("reSel").onclick = async () => {
+  const sel = D.creators.filter((c) => picked.has(c.key));
+  const x = sel.filter((c) => c.platform === "x");
+  if (!x.length) { alert("Only X accounts can be re-analyzed (LinkedIn numbers are typed in)."); return; }
+  const cost = D.apify ? ` Uses Apify: about $${(x.length * 0.05).toFixed(2)} (~$0.05 per account).` : "";
+  if (!confirm(`Re-analyze ${x.length} account${x.length === 1 ? "" : "s"}: fresh followers, their recent posts (median views / ER) and the bot-follower check.${cost}`
+    + (x.length < sel.length ? `\n${sel.length - x.length} non-X selected will be skipped.` : "") + "\n\nRows show “analyzing…” until each one is done.")) return;
+  $("reSel").disabled = true;
+  try {
+    await api("/api/creators/reanalyze", { keys: x.map((c) => c.key) });
+    picked.clear();
+  } catch (err) { alert("Couldn't start: " + err.message); }
+  finally { $("reSel").disabled = false; load(); }
+};
 $("outSel").onclick = async () => {
   const keys = [...picked];
   const names = ACCTS.map((a) => a.name);
