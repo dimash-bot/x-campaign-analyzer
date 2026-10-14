@@ -73,11 +73,10 @@ The app exposes an MCP server at `https://<your-railway-domain>/mcp`, so Claude 
 **Wave builder** (`/builder`): pick creators from Influencers into a draft wave; it sums their expected views (our paid
 posts, else their median), prices (typed, quote, or past pay) and projects registrations / API users from past waves.
 Drafts are saved for the whole team. **Create wave →** turns a plan into a wave on Waves, which then lists those creators
-with their DM link, the X account that contacted them, paid status and whether they have posted.
+with a link to their X account, the account of ours that contacted them, paid status and whether they have posted.
 
-**Outreach** (Influencers → ✉): write a DM (team templates with {first_name}/{name}/{handle}), pick which of our X
-accounts it goes from, and "Open DM in X" opens x.com with the text prefilled — you press send there. Each message is
-logged (who, from which account, when); the Outreached column shows "from @account". **Paid** column: automatic once
+**Outreach**: tick Outreached and type which of our X accounts contacted them (shown with a link to that account, on
+Influencers, Wave builder and the wave's roster). **Paid** column: automatic once
 a creator has a paid post with us, or set by hand.
 
 Tools: `list_campaigns`, `create_campaign`, `rename_campaign`, `add_posts`, `update_post`, `remove_post`,

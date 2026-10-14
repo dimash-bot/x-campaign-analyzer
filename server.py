@@ -139,12 +139,6 @@ def init_db():
                           # paid / not paid set by hand (NULL = automatic: paid once they have a paid post with us)
                           ("paid_status", "TEXT"), ("paid_status_by", "TEXT"), ("paid_status_at", "TEXT")]:
             add_col("creators", col, decl)
-        # Every message sent from the outreach tool: to whom, from which of our X accounts, by which teammate
-        c.execute("""CREATE TABLE IF NOT EXISTS outreach_log (
-            id INTEGER PRIMARY KEY, creator_key TEXT NOT NULL, sender TEXT, message TEXT, sent_by TEXT, sent_at TEXT)""")
-        c.execute("CREATE INDEX IF NOT EXISTS outreach_log_key ON outreach_log(creator_key)")
-        c.execute("""CREATE TABLE IF NOT EXISTS outreach_templates (
-            id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, body TEXT NOT NULL, updated_by TEXT, updated_at TEXT)""")
         # Their own recent posts, pasted as links when X won't list the timeline (no login). Read like wave posts.
         c.execute("""CREATE TABLE IF NOT EXISTS sample_posts (
             creator_key TEXT NOT NULL, tweet_id TEXT NOT NULL, url TEXT, created_at TEXT,
@@ -473,8 +467,10 @@ def set_manual_verdict(key, verdict, note, email):
     return {"key": key, "verdict": verdict if manual else "auto"}
 
 
-def set_outreached(keys, on, email):
-    """Tick / untick 'outreached' (we've texted them) for one or more creators; remembers who and when."""
+def set_outreached(keys, on, email, sender=None):
+    """Tick / untick 'outreached' (we've texted them) for one or more creators; remembers who, when and from which
+    of our X accounts. Changing only the account of an already-ticked creator keeps the original who / when."""
+    sender = clean_sender(sender)
     keys = [k for k in keys if isinstance(k, str) and ":" in k]
     if not keys:
         raise ValueError("no creators given")
@@ -482,72 +478,25 @@ def set_outreached(keys, on, email):
         for k in keys:
             platform, _, handle = k.partition(":")
             c.execute("INSERT INTO creators(key, platform, handle) VALUES (?,?,?) ON CONFLICT(key) DO NOTHING", (k, platform, handle))
-            c.execute("UPDATE creators SET outreached=?, outreached_by=?, outreached_at=? WHERE key=?",
-                      (1 if on else 0, email if on else None, now() if on else None, k))
             if not on:
-                c.execute("UPDATE creators SET outreach_from=NULL WHERE key=?", (k,))
+                c.execute("UPDATE creators SET outreached=0, outreached_by=NULL, outreached_at=NULL, outreach_from=NULL WHERE key=?", (k,))
+                continue
+            was = c.execute("SELECT outreached FROM creators WHERE key=?", (k,)).fetchone()[0]
+            if not was:
+                c.execute("UPDATE creators SET outreached=1, outreached_by=?, outreached_at=? WHERE key=?", (email, now(), k))
+            if sender is not None:
+                c.execute("UPDATE creators SET outreach_from=? WHERE key=?", (sender, k))
     return {"updated": len(keys), "outreached": bool(on)}
 
 
 def clean_sender(sender):
+    """'@naceai' / 'x.com/naceai' / 'naceai' → 'naceai'; None stays None (= don't change), '' → '' (clear)."""
+    if sender is None:
+        return None
     s = (sender or "").strip()
     m = re.search(r"(?:x|twitter)\.com/@?([A-Za-z0-9_]+)", s)
     s = (m.group(1) if m else s).lstrip("@")
-    return s[:40] or None
-
-
-def log_outreach(keys, sender, message, email):
-    """Record that we messaged these creators (from our X account `sender`) and tick them outreached."""
-    keys = [k for k in keys if isinstance(k, str) and ":" in k]
-    if not keys:
-        raise ValueError("no creators given")
-    sender = clean_sender(sender)
-    if not sender:
-        raise ValueError("which X account is the message sent from?")
-    t = now()
-    with _db_lock, db() as c:
-        for k in keys:
-            platform, _, handle = k.partition(":")
-            c.execute("INSERT INTO creators(key, platform, handle) VALUES (?,?,?) ON CONFLICT(key) DO NOTHING", (k, platform, handle))
-            c.execute("UPDATE creators SET outreached=1, outreached_by=?, outreached_at=?, outreach_from=? WHERE key=?", (email, t, sender, k))
-            c.execute("INSERT INTO outreach_log(creator_key, sender, message, sent_by, sent_at) VALUES (?,?,?,?,?)",
-                      (k, sender, (message or "")[:4000], email, t))
-    return {"logged": len(keys), "sender": sender}
-
-
-def outreach_history(key=None):
-    with db() as c:
-        if key:
-            rows = c.execute("SELECT * FROM outreach_log WHERE creator_key=? ORDER BY sent_at DESC, id DESC", (key,))
-        else:
-            rows = c.execute("SELECT * FROM outreach_log ORDER BY sent_at DESC, id DESC LIMIT 500")
-        log = [dict(r) for r in rows]
-        senders = [r[0] for r in c.execute(
-            "SELECT sender FROM outreach_log WHERE sender IS NOT NULL GROUP BY sender ORDER BY max(sent_at) DESC")]
-        templates = [dict(r) for r in c.execute("SELECT * FROM outreach_templates ORDER BY name")]
-    return {"log": log, "senders": senders, "templates": templates}
-
-
-def save_template(name, body, email, template_id=None):
-    name, body = (name or "").strip()[:80], (body or "").strip()[:4000]
-    if not name or not body:
-        raise ValueError("template needs a name and a message")
-    with _db_lock, db() as c:
-        if template_id:
-            c.execute("UPDATE outreach_templates SET name=?, body=?, updated_by=?, updated_at=? WHERE id=?",
-                      (name, body, email, now(), int(template_id)))
-            return {"id": int(template_id), "name": name}
-        cur = c.execute("""INSERT INTO outreach_templates(name, body, updated_by, updated_at) VALUES (?,?,?,?)
-                           ON CONFLICT(name) DO UPDATE SET body=excluded.body, updated_by=excluded.updated_by,
-                           updated_at=excluded.updated_at""", (name, body, email, now()))
-        row = c.execute("SELECT id FROM outreach_templates WHERE name=?", (name,)).fetchone()
-        return {"id": row[0] if row else cur.lastrowid, "name": name}
-
-
-def delete_template(template_id):
-    with _db_lock, db() as c:
-        c.execute("DELETE FROM outreach_templates WHERE id=?", (int(template_id),))
-    return {"deleted": int(template_id)}
+    return s[:40]
 
 
 PAID_STATUSES = ("paid", "not_paid")
@@ -913,8 +862,6 @@ def creators_view(enqueue_stale=True):
         prof = {r["key"]: dict(r) for r in c.execute("SELECT * FROM creators")}
         posts = [dict(r) for r in c.execute(f"SELECT * FROM posts WHERE author IS NOT NULL AND author != '' AND {INCLUDED}")]
     samples = sample_counts()
-    with db() as c:
-        contacts = {r[0]: r[1] for r in c.execute("SELECT creator_key, count(*) FROM outreach_log GROUP BY creator_key")}
     rows, stale = {}, []
     for p in posts:
         k = creator_key(p["platform"], p["author"])
@@ -967,7 +914,7 @@ def creators_view(enqueue_stale=True):
             # when they joined our list: added by hand to vet, else their first post for us
             "added_at": pr.get("added_at") or r.get("first_post"),
             "outreached": bool(pr.get("outreached")), "outreached_by": pr.get("outreached_by"), "outreached_at": pr.get("outreached_at"),
-            "outreach_from": pr.get("outreach_from"), "messages": contacts.get(k, 0), "user_id": pr.get("user_id"),
+            "outreach_from": pr.get("outreach_from") or None,
             # paid / not paid: set by hand wins, else paid once they have a paid post with us
             "paid_status": pr.get("paid_status") if pr.get("paid_status") in PAID_STATUSES else ("paid" if r["paid"] > 0 else "not_paid"),
             "paid_status_manual": pr.get("paid_status") in PAID_STATUSES,
@@ -992,7 +939,8 @@ def creators_view(enqueue_stale=True):
         busy = {p.split(":", 1)[1].rsplit(":", 1)[0] for p in _pending if isinstance(p, str) and p.startswith("s:")}
         pend = [r["key"] for r in out if r["key"] in _pending or r["key"] in busy or r["key"] in _apify_busy
                 or "f:" + r["key"] in _apify_busy]
-    return {"creators": out, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0")),
+    senders = sorted({r["outreach_from"] for r in out if r["outreach_from"]}, key=str.lower)
+    return {"creators": out, "senders": senders, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0")),
             "apify": apify_client.enabled()}
 
 
@@ -1196,7 +1144,6 @@ def wave_roster(c, campaign_id):
         return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": []}
     qs = ",".join("?" * len(keys))
     prof = {r["key"]: dict(r) for r in c.execute(f"SELECT * FROM creators WHERE key IN ({qs})", keys)}
-    msgs = {r[0]: r[1] for r in c.execute(f"SELECT creator_key, count(*) FROM outreach_log WHERE creator_key IN ({qs}) GROUP BY creator_key", keys)}
     posted, paid_any, want, spent = {}, set(), set(keys), {}
     for p in c.execute(f"SELECT campaign_id, platform, author, budget FROM posts WHERE author IS NOT NULL AND {INCLUDED}"):
         k = creator_key(p["platform"], p["author"])
@@ -1219,10 +1166,11 @@ def wave_roster(c, campaign_id):
                     "name": pr.get("name") or pr.get("handle") or handle, "avatar": pr.get("avatar"), "user_id": pr.get("user_id"),
                     "followers": pr.get("followers"), "median_views": pr.get("median_views"), "price": price,
                     "outreached": bool(pr.get("outreached")), "outreached_by": pr.get("outreached_by"),
-                    "outreached_at": pr.get("outreached_at"), "outreach_from": pr.get("outreach_from"), "messages": msgs.get(k, 0),
+                    "outreached_at": pr.get("outreached_at"), "outreach_from": pr.get("outreach_from") or None,
                     "paid_status": pr["paid_status"] if manual else ("paid" if k in paid_any else "not_paid"),
                     "paid_status_manual": manual, "posted": posted.get(k, 0)})
-    return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": out}
+    senders = [r[0] for r in c.execute("SELECT DISTINCT outreach_from FROM creators WHERE outreach_from IS NOT NULL AND outreach_from != '' ORDER BY 1")]
+    return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": out, "senders": senders}
 
 
 def delete_plan(plan_id):
@@ -1697,11 +1645,6 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/builder":
             with open(os.path.join(HERE, "static", "builder.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
-        if u.path == "/outreach.js":
-            with open(os.path.join(HERE, "static", "outreach.js"), "rb") as f:
-                return self._send(200, f.read(), "text/javascript; charset=utf-8")
-        if u.path == "/api/outreach":
-            return self._send(200, outreach_history((q.get("key") or [None])[0]))
         if u.path == "/api/plans":
             return self._send(200, plans_list())
         if u.path == "/api/report":
@@ -1817,23 +1760,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, delete_agency(b["id"]))
             except (KeyError, ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
-        if path in ("/api/outreach/log", "/api/creators/paid", "/api/outreach/templates/save", "/api/outreach/templates/delete"):
+        if path == "/api/creators/paid":
             b = json.loads(self._body_bytes() or b"{}")
-            keys = b.get("keys") or [b.get("key")]
             try:
-                if path == "/api/outreach/log":
-                    return self._send(200, log_outreach(keys, b.get("sender"), b.get("message"), user.get("email")))
-                if path == "/api/creators/paid":
-                    return self._send(200, set_paid_status(keys, b.get("status"), user.get("email")))
-                if path == "/api/outreach/templates/save":
-                    return self._send(200, save_template(b.get("name"), b.get("body"), user.get("email"), b.get("id")))
-                return self._send(200, delete_template(b["id"]))
+                return self._send(200, set_paid_status(b.get("keys") or [b.get("key")], b.get("status"), user.get("email")))
             except (KeyError, ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/creators/outreach":
             b = json.loads(self._body_bytes() or b"{}")
             try:
-                return self._send(200, set_outreached(b.get("keys") or [b.get("key")], bool(b.get("outreached")), user.get("email")))
+                return self._send(200, set_outreached(b.get("keys") or [b.get("key")], bool(b.get("outreached")), user.get("email"),
+                                                             b.get("sender")))
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/creators/remove":

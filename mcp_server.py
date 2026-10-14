@@ -134,8 +134,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["creators"], "properties": {
          "creators": {"type": "array", "items": {"type": "string"}, "description": "X handles (e.g. dravenip) or LinkedIn names"},
          "outreached": {"type": "boolean", "description": "true = we've reached out (default), false = clear the tick"},
-         "sender": {"type": "string", "description": "our X account the message went from, e.g. naceai — logs the outreach with it"},
-         "message": {"type": "string", "description": "optional: the text that was sent (kept in the outreach log)"},
+         "sender": {"type": "string", "description": "our X account they were contacted from, e.g. naceai"},
          "platform": {"type": "string", "enum": ["x", "linkedin", "other"], "description": "default x"}}}},
     {"name": "set_paid_status",
      "description": "Mark influencers paid or not paid (the Paid column on Influencers). 'auto' goes back to the default: "
@@ -144,10 +143,6 @@ TOOLS = [
          "creators": {"type": "array", "items": {"type": "string"}, "description": "X handles or LinkedIn names"},
          "status": {"type": "string", "enum": ["paid", "not_paid", "auto"]},
          "platform": {"type": "string", "enum": ["x", "linkedin", "other"], "description": "default x"}}}},
-    {"name": "get_outreach_log",
-     "description": "Who we've messaged, from which of our X accounts, by whom and when (latest 500, or one creator).",
-     "inputSchema": {"type": "object", "properties": {
-         "creator": {"type": "string", "description": "optional X handle to filter to one creator"}}}},
     {"name": "set_creator_stats",
      "description": "Save an influencer's profile/baseline numbers that couldn't be fetched (LinkedIn followers, or median "
                     "views/ER when X needs a login). Identify the creator by X handle or, for LinkedIn, their name.",
@@ -225,15 +220,11 @@ def call_tool(app, user, name, args):
     if name == "set_outreached":
         keys = [app.creator_key(args.get("platform") or "x", str(h).lstrip("@")) for h in args.get("creators") or []]
         email = user if isinstance(user, str) else (user or {}).get("email")
-        if args.get("outreached", True) and args.get("sender"):
-            return app.log_outreach(keys, args["sender"], args.get("message"), email)
-        return app.set_outreached(keys, args.get("outreached", True), email)
+        return app.set_outreached(keys, args.get("outreached", True), email, args.get("sender"))
     if name == "set_paid_status":
         keys = [app.creator_key(args.get("platform") or "x", str(h).lstrip("@")) for h in args.get("creators") or []]
         email = user if isinstance(user, str) else (user or {}).get("email")
         return app.set_paid_status(keys, args["status"], email)
-    if name == "get_outreach_log":
-        return app.outreach_history(app.creator_key("x", str(args["creator"]).lstrip("@")) if args.get("creator") else None)
     if name == "set_creator_stats":
         key = app.creator_key(args.get("platform") or "x", str(args["creator"]).lstrip("@"))
         fields = {k: args.get(k) for k in ("followers", "median_views", "median_likes", "median_er", "sample_size")}

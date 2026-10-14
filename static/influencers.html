@@ -131,9 +131,9 @@ button.x:hover { color: var(--bad); background: transparent; }
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-sizing: border-box; }
 .modal .row { justify-content: flex-end; margin-top: 12px; }
 .modal .msg { margin-right: auto; font-size: 12.5px; color: var(--muted); }
-.mail { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 1px 6px; font-size: 12px; cursor: pointer; margin-left: 4px; }
-.mail:hover { border-color: var(--accent); color: var(--accent); }
-.from { display: block; font-size: 11px; color: var(--muted); }
+.acct { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
+.acct input { width: 112px; font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+.acct a { color: var(--accent); text-decoration: none; font-size: 12px; }
 select.paid { font-size: 12px; padding: 2px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); }
 select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--border)); font-weight: 600; }
 .auto { display: block; font-size: 10.5px; color: var(--muted); }
@@ -178,7 +178,6 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
       </span>
       <span style="flex:1"></span>
       <button id="refresh" hidden title="Re-fetch followers and recent posts from X (admins only)">↻ Refresh profiles</button>
-      <button id="msgSel" hidden title="Write one message and send it to each selected creator in turn">✉ Message selected</button>
       <button id="outSel" hidden title="Tick 'Outreached' for every selected creator">Mark outreached</button>
       <button id="delSel" class="danger" hidden>Delete selected</button>
       <button id="addBtn" class="primary" title="Paste a list of X accounts to check their quality before paying them">+ Add influencers</button>
@@ -270,7 +269,7 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
 
 <div class="qtip" id="qtip" role="tooltip"></div>
 
-<script src="/outreach.js"></script>
+<datalist id="senderList"></datalist>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -367,7 +366,7 @@ function render() {
         <div><a href="${esc(link)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.verified ? ` <span title="Verified" class="muted">✓</span>` : ""}<span class="badge">${PLAT[c.platform]}</span>${note}${c.prospect ? `<button class="x" title="Remove from the list" data-remove="${esc(c.key)}">✕</button>` : ""}
           <small>${c.platform === "x" ? "@" + esc(c.handle) + " · " : ""}${c.prospect ? `<span class="prospectchip">no posts yet</span>` : c.waves.map((w) => `<span class="wavechip">${esc(w)}</span>`).join("")}</small></div>
       </div></td>
-      <td class="l"><label class="out${c.outreached ? " on" : ""}" title="${c.outreached ? `Outreached by ${esc(c.outreached_by || "?")} on ${c.outreached_at ? new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "?"} — untick to clear` : "Tick once we've texted / DMed them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<small>${esc((c.outreached_by || "").split("@")[0])}${c.outreached_at ? " · " + new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}</small>` : ""}</label><button class="mail" data-msg="${esc(c.key)}" title="Write a DM to ${esc(c.platform === "x" ? "@" + c.handle : c.name)}">✉</button>${c.outreach_from ? `<span class="from" title="${c.messages} message${c.messages === 1 ? "" : "s"} logged">from @${esc(c.outreach_from)}${c.messages > 1 ? " · " + c.messages + " msgs" : ""}</span>` : ""}</td>
+      <td class="l"><label class="out${c.outreached ? " on" : ""}" title="${c.outreached ? `Outreached by ${esc(c.outreached_by || "?")} on ${c.outreached_at ? new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "?"} — untick to clear` : "Tick once we've texted / DMed them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<small>${esc((c.outreached_by || "").split("@")[0])}${c.outreached_at ? " · " + new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}</small>` : ""}</label>${c.outreached ? `<span class="acct"><input data-acct="${esc(c.key)}" list="senderList" value="${c.outreach_from ? "@" + esc(c.outreach_from) : ""}" placeholder="from @account" title="Which of our X accounts contacted them">${c.outreach_from ? `<a href="https://x.com/${encodeURIComponent(c.outreach_from)}" target="_blank" rel="noopener" title="Open @${esc(c.outreach_from)} on X">↗</a>` : ""}</span>` : ""}</td>
       <td class="l"><select class="paid ${c.paid_status === "paid" ? "yes" : ""}" data-paid="${esc(c.key)}" title="${c.paid_status_manual ? `Set by ${esc(c.paid_status_by || "?")}` : "Automatic: paid once they have a paid post with us"}"><option value="paid" ${c.paid_status === "paid" ? "selected" : ""}>Paid</option><option value="not_paid" ${c.paid_status === "not_paid" ? "selected" : ""}>Not paid</option>${c.paid_status_manual ? `<option value="auto">↺ Auto</option>` : ""}</select>${c.paid_status_manual ? "" : `<span class="auto">auto</span>`}</td>
       <td class="l muted" title="${c.added_at ? new Date(c.added_at).toLocaleString() : ""}">${c.added_at ? new Date(c.added_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</td>
       <td class="l">${pend ? `<span class="fetching">analyzing…</span>`
@@ -397,6 +396,7 @@ async function load() {
   clearTimeout(timer);
   try {
     D = await api("/api/creators");
+    $("senderList").innerHTML = (D.senders || []).map((s) => `<option value="@${esc(s)}">`).join("");
     for (const c of D.creators) c.qrank = { good: 3, test: 2, partial: 1, bad: 0 }[c.quality?.verdict] ?? 1;
     if (!editing()) render();
   } catch (e) {}
@@ -422,7 +422,7 @@ $("rows").addEventListener("change", async (e) => {
   const cb = e.target.closest("input[data-out]"); if (!cb) return;
   const c = D.creators.find((x) => x.key === cb.dataset.out);
   try {
-    await api("/api/creators/outreach", { key: cb.dataset.out, outreached: cb.checked });
+    await api("/api/creators/outreach", { key: cb.dataset.out, outreached: cb.checked, sender: cb.checked ? lastSender() || null : null });
     if (c) { c.outreached = cb.checked; }
     cb.blur(); load();
   } catch (err) { cb.checked = !cb.checked; cb.closest("label").title = "Couldn't save: " + err.message; }
@@ -439,8 +439,6 @@ function syncPicked() {
   $("selAll").indeterminate = !$("selAll").checked && shown.some((c) => picked.has(c.key));
   $("delSel").hidden = !picked.size;
   $("outSel").hidden = !picked.size;
-  $("msgSel").hidden = !picked.size;
-  $("msgSel").textContent = `✉ Message ${picked.size} selected`;
   $("outSel").textContent = `Mark ${picked.size} outreached`;
   $("delSel").textContent = `Delete ${picked.size} selected`;
 }
@@ -456,7 +454,10 @@ $("selAll").addEventListener("change", (e) => {
 });
 $("outSel").onclick = async () => {
   const keys = [...picked];
-  try { await api("/api/creators/outreach", { keys, outreached: true }); picked.clear(); load(); }
+  const sender = prompt(`Mark ${keys.length} outreached — from which of our X accounts?`, lastSender());
+  if (sender === null) return;
+  if (sender.trim()) try { localStorage.setItem("xca_sender", sender.trim()); } catch (err) {}
+  try { await api("/api/creators/outreach", { keys, outreached: true, sender: sender.trim() || null }); picked.clear(); load(); }
   catch (err) { $("outSel").title = "Couldn't save: " + err.message; }
 };
 $("delSel").onclick = async () => {
@@ -572,9 +573,17 @@ $("chkForm").addEventListener("submit", async (e) => {
   finally { $("chkOk").disabled = false; }
 });
 
-// ---- Outreach: shared composer (static/outreach.js)
-$("rows").addEventListener("click", (e) => { const b = e.target.closest("[data-msg]"); if (b) Outreach.open([D.creators.find((c) => c.key === b.dataset.msg)], { onDone: load }); });
-$("msgSel").onclick = () => Outreach.open(D.creators.filter((c) => picked.has(c.key)), { onDone: () => { picked.clear(); load(); } });
+// Which of our X accounts contacted them: typed next to the tick, remembered as the default for the next tick
+const lastSender = () => { try { return localStorage.getItem("xca_sender") || ""; } catch (e) { return ""; } };
+$("rows").addEventListener("change", async (e) => {
+  const el = e.target.closest("input[data-acct]"); if (!el) return;
+  const v = el.value.trim();
+  try {
+    await api("/api/creators/outreach", { key: el.dataset.acct, outreached: true, sender: v });
+    if (v) try { localStorage.setItem("xca_sender", v); } catch (err) {}
+    el.blur(); load();
+  } catch (err) { el.style.borderColor = "var(--bad)"; el.title = "Couldn't save: " + err.message; }
+});
 // Paid / not paid
 $("rows").addEventListener("change", async (e) => {
   const sel = e.target.closest("select[data-paid]"); if (!sel) return;

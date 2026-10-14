@@ -89,8 +89,10 @@ tr.in .add { background: var(--accent); border-color: var(--accent); color: var(
 .price.def { color: var(--muted); }
 .x { border: none; background: none; color: var(--muted); padding: 2px 6px; }
 .x:hover { color: var(--bad); background: none; }
-.mail { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 1px 6px; font-size: 12px; cursor: pointer; }
-.mail:hover { border-color: var(--accent); color: var(--accent); background: var(--surface); }
+.otick { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px; }
+.acct { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
+.acct input { width: 108px; font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+.acct a, a.sl { color: var(--accent); text-decoration: none; }
 .ost { display: block; font-size: 11px; color: var(--muted); } .ost.on { color: var(--good); }
 .wavebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); font-size: 13px; }
 .wavebar a { color: var(--accent); font-weight: 600; }
@@ -224,7 +226,7 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
   </div>
 </div>
 
-<script src="/outreach.js"></script>
+<datalist id="senderList"></datalist>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -307,7 +309,7 @@ function renderPicker() {
     return `<tr class="${on ? "in" : ""}">
       <td><button class="add" data-toggle="${esc(c.key)}" title="${on ? "Remove from plan" : "Add to plan"}">${on ? "✓" : "+"}</button></td>
       <td>${who(c)}</td>
-      <td class="l">${c.outreached ? `<span title="${esc((c.outreached_by || "") + " " + (c.outreached_at || ""))}">✓ ${c.outreached_at ? fmtD(c.outreached_at) : ""}</span>${c.outreach_from ? `<span class="src">from @${esc(c.outreach_from)}</span>` : ""}` : `<span class="muted">—</span>`}</td>
+      <td class="l">${c.outreached ? `<span title="${esc((c.outreached_by || "") + " " + (c.outreached_at || ""))}">✓ ${c.outreached_at ? fmtD(c.outreached_at) : ""}</span>${c.outreach_from ? `<span class="src">from <a class="sl" href="https://x.com/${encodeURIComponent(c.outreach_from)}" target="_blank" rel="noopener">@${esc(c.outreach_from)}</a></span>` : ""}` : `<span class="muted">—</span>`}</td>
       <td class="l">${c.paid_status === "paid" ? `<span class="badge good">Paid</span>` : `<span class="badge">Not paid</span>`}</td>
       <td class="l">${c.added_at ? fmtD(c.added_at) : "—"}</td>
       <td class="l"><span class="badge ${v}" title="${esc([...(c.quality?.kills || []), ...(c.quality?.flags || [])].join("\n"))}">${QLABEL[v]}</span></td>
@@ -406,9 +408,7 @@ function renderPlan() {
     return `<tr>
       <td><button class="x" data-toggle="${esc(r.it.key)}" title="Remove">✕</button></td>
       <td>${r.c ? who(r.c) : "@" + esc(h)}</td>
-      <td style="text-align:left">${r.c ? `<button class="mail" data-msg="${esc(r.it.key)}" title="Write a DM">✉</button>` : ""}
-        ${r.c?.outreached ? `<span class="ost on" title="${esc(r.c.outreached_by || "")}">✓ ${r.c.outreach_from ? "from @" + esc(r.c.outreach_from) : "outreached"}</span>` : `<span class="ost">not contacted</span>`}
-        <span class="ost">${r.c?.paid_status === "paid" ? "paid" : "not paid"}</span></td>
+      <td style="text-align:left">${r.c ? outCell(r.c) : ""}<span class="ost">${r.c?.paid_status === "paid" ? "paid" : "not paid"}</span></td>
       <td>${fmtN(r.views)}</td>
       <td><input class="price ${ok(r.it.price) ? "" : "def"}" data-price="${esc(r.it.key)}" inputmode="decimal"
         value="${ok(r.it.price) ? r.it.price : ""}" placeholder="${ok(r.c?.def_price) ? Math.round(r.c.def_price) : "—"}"
@@ -431,7 +431,7 @@ function render() { renderPicker(); renderPlan(); }
 function renderWaveBar(rows) {
   const saved = PLANS.find((p) => p.id === plan.id);
   const todo = rows.filter((r) => r.c && !r.c.outreached).length;
-  const msgBtn = rows.length ? `<button id="msgAll" ${todo ? "" : "disabled"}>✉ Message ${todo ? todo + " not contacted" : "— all contacted"}</button>` : "";
+  const msgBtn = rows.length ? `<span class="muted">${todo ? todo + " not contacted yet" : "all contacted"}</span>` : "";
   $("waveBar").innerHTML = saved?.campaign_id
     ? `<span>Wave created: <a href="/" data-wave="${saved.campaign_id}">${esc(saved.campaign_name || "open in Waves")} →</a></span><span style="flex:1"></span>${msgBtn}`
     : `<span class="muted">Ready? Turn this plan into a wave — it shows on Waves with each creator's DM link and the account used.</span>
@@ -440,10 +440,6 @@ function renderWaveBar(rows) {
 $("waveBar").addEventListener("click", async (e) => {
   const a = e.target.closest("[data-wave]");
   if (a) { e.preventDefault(); try { localStorage.setItem("xca_campaign", a.dataset.wave); } catch (err) {} location.href = "/"; return; }
-  if (e.target.id === "msgAll") {
-    Outreach.open(plan.items.map((i) => byKey[i.key]).filter((c) => c && !c.outreached), { onDone: reload });
-    return;
-  }
   if (e.target.id !== "toWave") return;
   if (!plan.id || dirty) { await save(false); if (!plan.id || dirty) return; }
   if (!confirm(`Create the wave "${plan.name}" on the Waves page with ${plan.items.length} creators?`)) return;
@@ -455,11 +451,29 @@ $("waveBar").addEventListener("click", async (e) => {
     $("status").textContent = `Wave created — open it on Waves`; $("status").className = "status";
   } catch (err) { $("status").textContent = "Couldn't create the wave: " + err.message; $("status").className = "status dirty"; }
 });
-$("plan").addEventListener("click", (e) => { const b = e.target.closest("[data-msg]"); if (b) Outreach.open([byKey[b.dataset.msg]], { onDone: reload }); });
+// Outreached tick + which of our X accounts contacted them (same fields as on Influencers)
+const lastSender = () => { try { return localStorage.getItem("xca_sender") || ""; } catch (e) { return ""; } };
+function outCell(c) {
+  return `<label class="otick" title="${c.outreached ? esc(`by ${c.outreached_by || "?"}`) : "Tick once we've contacted them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<span class="ost on">outreached</span>` : `<span class="ost">not contacted</span>`}</label>`
+    + (c.outreached ? `<span class="acct"><input data-acct="${esc(c.key)}" list="senderList" value="${c.outreach_from ? "@" + esc(c.outreach_from) : ""}" placeholder="from @account" title="Which of our X accounts contacted them">${c.outreach_from ? `<a href="https://x.com/${encodeURIComponent(c.outreach_from)}" target="_blank" rel="noopener" title="Open @${esc(c.outreach_from)} on X">↗</a>` : ""}</span>` : "");
+}
+$("plan").addEventListener("change", async (e) => {
+  const cb = e.target.closest("input[data-out]"), ac = e.target.closest("input[data-acct]");
+  if (!cb && !ac) return;
+  e.stopPropagation();
+  const v = ac ? ac.value.trim() : null;
+  try {
+    await api("/api/creators/outreach", cb ? { key: cb.dataset.out, outreached: cb.checked, sender: cb.checked ? lastSender() || null : null }
+                                           : { key: ac.dataset.acct, outreached: true, sender: v });
+    if (v) try { localStorage.setItem("xca_sender", v); } catch (err) {}
+    reload();
+  } catch (err) { (cb || ac).title = "Couldn't save: " + err.message; }
+}, true);
 // Fresh creators (outreach status) without touching the plan being edited
 async function reload() {
   const cr = await api("/api/creators");
   C = cr.creators.map(enrich); byKey = Object.fromEntries(C.map((c) => [c.key, c]));
+  $("senderList").innerHTML = (cr.senders || []).map((s) => `<option value="@${esc(s)}">`).join("");
   render();
 }
 
@@ -559,6 +573,7 @@ window.addEventListener("beforeunload", (e) => { if (dirty && plan.items.length)
 async function load() {
   const [cr, rep, pl] = await Promise.all([api("/api/creators"), api("/api/report"), api("/api/plans")]);
   C = cr.creators.map(enrich); byKey = Object.fromEntries(C.map((c) => [c.key, c])); R = rep; PLANS = pl.plans;
+  $("senderList").innerHTML = (cr.senders || []).map((s) => `<option value="@${esc(s)}">`).join("");
   const waves = R.campaigns.filter((w) => w.registrations);
   const saved = store.get("xca_bench");
   $("bench").innerHTML = `<option value="all">All waves (${ok(R.totals.regs_per_1k_views) ? R.totals.regs_per_1k_views.toFixed(2) : "—"} regs / 1K views)</option>` +
