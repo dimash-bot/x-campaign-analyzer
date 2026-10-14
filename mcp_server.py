@@ -94,7 +94,8 @@ TOOLS = [
                     "recalculates daily registrations and API users for all waves.",
      "inputSchema": {"type": "object", "required": ["csv_text"], "properties": {
          "csv_text": {"type": "string", "description": "The full CSV file content"},
-         "timezone": {"type": "string", "description": "IANA timezone of the signup times, default America/Los_Angeles"}}}},
+         "timezone": {"type": "string", "description": "IANA timezone of the signup times, default America/Los_Angeles"},
+         "replace": {"type": "boolean", "description": "true = this file is the full cleaned list: remove users that aren't in it"}}}},
     {"name": "add_registrations",
      "description": "Record signups for a wave by hand (when there's no signup CSV for them): registrations and API users "
                     "for a day. These are ADDED to whatever the imported CSV gives for that wave and day; calling again "
@@ -218,7 +219,7 @@ def call_tool(app, user, name, args):
         fields["baseline_note"] = args.get("note")
         return app.set_creator_stats(key, fields, source="claude")
     if name == "import_users":
-        return app.import_users(args["csv_text"], args.get("timezone") or "America/Los_Angeles")
+        return app.import_users(args["csv_text"], args.get("timezone") or "America/Los_Angeles", bool(args.get("replace")))
 
     to_fetch, result = [], None
     with app._db_lock, app.db() as c:

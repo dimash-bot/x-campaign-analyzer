@@ -1084,7 +1084,8 @@ def _parse_time(s, tz):
     return t.astimezone(timezone.utc)
 
 
-def import_users(csv_text, tz_name="America/Los_Angeles"):
+def import_users(csv_text, tz_name="America/Los_Angeles", replace=False):
+    """replace=True: the file is the full, cleaned list — users not in it are removed (e.g. accounts dropped as fraud)."""
     """Upsert users from a signup export. Columns are matched by name, so other export shapes work too."""
     tz = ZoneInfo(tz_name) if ZoneInfo else timezone.utc
     rows = list(csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff"))))
@@ -1103,13 +1104,14 @@ def import_users(csv_text, tz_name="America/Los_Angeles"):
     # "Requests" is the last-7-days count when an all-time column exists next to it
     c_req7 = col("requests_7d") or (cols.get("requests") if c_req != cols.get("requests") else None)
     c_credit, c_method, c_ref = col("credit"), col("sign_in_method", "sign_in"), col("ref", "referral", "utm_source", "referrer")
-    ok, bad = 0, 0
+    ok, bad, seen, removed = 0, 0, set(), 0
     with _db_lock, db() as c:
         for r in rows:
             email, t = (r.get(c_email) or "").strip().lower(), _parse_time(r.get(c_time), tz)
             if not email or not t:
                 bad += 1
                 continue
+            seen.add(email)
             c.execute("""INSERT INTO users(email, signed_up, keys, requests_all, requests_7d, credit, unconfirmed, ref, imported_at)
                          VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET signed_up=excluded.signed_up,
                          keys=excluded.keys, requests_all=excluded.requests_all, requests_7d=excluded.requests_7d,
@@ -1121,12 +1123,19 @@ def import_users(csv_text, tz_name="America/Los_Angeles"):
                        int("unconfirmed" in (r.get(c_method) or "").lower()) if c_method else 0,
                        (r.get(c_ref) or None) if c_ref else None, now()))
             ok += 1
+        if replace:
+            # Safety: never wipe the table because of a file we couldn't read properly
+            if not ok or bad > max(5, ok * 0.02):
+                raise ValueError(f"replace refused: {bad} unreadable rows out of {ok + bad}")
+            gone = [e for (e,) in c.execute("SELECT email FROM users") if e not in seen]
+            c.executemany("DELETE FROM users WHERE email=?", [(e,) for e in gone])
+            removed = len(gone)
         total = c.execute("SELECT count(*) FROM users").fetchone()[0]
         waves = {}
         for cid, rows_ in (user_days(c) or {}).items():
             waves[cid] = sum(d["registrations"] for d in rows_)
         names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM campaigns")}
-    return {"imported": ok, "skipped_rows": bad, "users_total": total, "timezone": tz_name,
+    return {"imported": ok, "skipped_rows": bad, "removed_not_in_file": removed, "users_total": total, "timezone": tz_name,
             "registrations_by_wave": {names[k]: v for k, v in waves.items()}}
 
 
@@ -1591,7 +1600,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/users/import":
             tz = parse_qs(u.query).get("tz", ["America/Los_Angeles"])[0]
             try:
-                res = import_users(self._body_bytes().decode("utf-8", "replace"), tz)
+                res = import_users(self._body_bytes().decode("utf-8", "replace"), tz,
+                                   replace=parse_qs(u.query).get("replace", ["0"])[0] in ("1", "true"))
                 drop_manual_days_duplicating_csv()
                 return self._send(200, res)
             except ValueError as e:
