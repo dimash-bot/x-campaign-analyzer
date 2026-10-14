@@ -102,7 +102,7 @@ class XClient:
         return True
 
     def _guest(self):
-        r = self.s.post("https://api.twitter.com/1.1/guest/activate.json", timeout=15)
+        r = self.s.post("https://api.x.com/1.1/guest/activate.json", timeout=15)
         r.raise_for_status()
         self.s.headers["x-guest-token"] = r.json()["guest_token"]
 
@@ -113,7 +113,7 @@ class XClient:
         last_err = "unknown error"
         for attempt in range(4):
             qid = QIDS[min(attempt, len(QIDS) - 1)]
-            r = self.s.get(f"https://api.twitter.com/graphql/{qid}/TweetResultByRestId",
+            r = self.s.get(f"https://api.x.com/graphql/{qid}/TweetResultByRestId",
                            params=params, timeout=20)
             if r.status_code == 200:
                 res = r.json().get("data", {}).get("tweetResult", {}).get("result")
@@ -138,7 +138,7 @@ class XClient:
         params = {"variables": json.dumps({"screen_name": handle.lstrip("@"), "withSafetyModeUserFields": True}),
                   "features": json.dumps(FEATURES_USER)}
         for _ in range(3):
-            r = self.s.get(f"https://api.twitter.com/graphql/{QID_USER}/UserByScreenName", params=params, timeout=20)
+            r = self.s.get(f"https://api.x.com/graphql/{QID_USER}/UserByScreenName", params=params, timeout=20)
             if r.status_code == 200:
                 break
             if r.status_code in (401, 403, 429) and self.mode == "guest":
@@ -174,7 +174,7 @@ class XClient:
         """The account's own recent original posts (no retweets/replies). Needs a logged-in session."""
         variables = {"userId": user_id, "count": count, "includePromotedContent": False,
                      "withQuickPromoteEligibilityTweetFields": True, "withVoice": True, "withV2Timeline": True}
-        r = self.s.get(f"https://api.twitter.com/graphql/{QID_USER_TWEETS}/UserTweets",
+        r = self.s.get(f"https://api.x.com/graphql/{QID_USER_TWEETS}/UserTweets",
                        params={"variables": json.dumps(variables), "features": json.dumps(FEATURES)}, timeout=25)
         if r.status_code != 200:
             raise RuntimeError(f"timeline HTTP {r.status_code}")
