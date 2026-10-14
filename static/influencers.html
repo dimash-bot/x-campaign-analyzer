@@ -145,6 +145,7 @@ button.x:hover { color: var(--bad); background: transparent; }
 .modal .row { justify-content: flex-end; margin-top: 12px; }
 .modal .msg { margin-right: auto; font-size: 12.5px; color: var(--muted); }
 .acct { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
+input.usa { width: 64px; text-align: right; padding: 3px 6px; font-size: 12.5px; }
 .acct select { font-size: 12px; padding: 2px 6px; border-radius: 6px; }
 .acct a { color: var(--accent); text-decoration: none; font-size: 12px; }
 select.paid { font-size: 12px; padding: 2px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); }
@@ -206,6 +207,7 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
           <th class="l" data-sort="added_at" title="When they joined our list: added by hand to vet, or their first post for us">Added</th>
           <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
           <th data-sort="bot_followers_pct" title="Share of their 200 newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
+          <th data-sort="usa_pct" title="Share of their audience in the USA — type the number from their analytics / media kit"><span class="grp">Audience</span>USA %</th>
           <th data-sort="followers" class="colsep"><span class="grp">Profile</span>Followers</th>
           <th data-sort="median_views"><span class="grp">Their normal</span>Median views</th>
           <th data-sort="median_er"><span class="grp">Their normal</span>ER</th>
@@ -387,6 +389,7 @@ function render() {
           + `<button class="x" title="Set quality by hand${c.platform === "x" ? " / quoted price / their post links" : ""}" data-check="${esc(c.key)}">✎</button>`
           + (why ? `<span class="why" data-tip="${esc(c.key)}">${esc(why)}</span>` : "")}</td>
       <td data-tip="${esc(c.key)}" class="${c.bot_followers_pct > 50 ? "bad" : c.bot_followers_pct > 40 ? "warn" : ""}">${ok(c.bot_followers_pct) ? c.bot_followers_pct.toFixed(0) + "%" : c.followers_error ? `<span class="err" title="${esc(c.followers_error)}">—</span>` : "—"}</td>
+      <td><input class="usa" type="number" min="0" max="100" step="any" placeholder="—" value="${ok(c.usa_pct) ? c.usa_pct : ""}" data-key="${esc(c.key)}" data-f="usa_pct" title="% of their audience in the USA"></td>
       ${cell(c, "followers", fmtN, "colsep")}
       ${cell(c, "median_views", fmtN)}
       ${cell(c, "median_er", (v) => pct(v))}
@@ -400,7 +403,7 @@ function render() {
       <td>${fmt$(c.cpe)}</td>
       <td>${fmt$(c.price_per_1k_followers)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="19" class="empty">No influencers match.</td></tr>`;
+  }).join("") : `<tr><td colspan="20" class="empty">No influencers match.</td></tr>`;
   syncPicked();
 }
 

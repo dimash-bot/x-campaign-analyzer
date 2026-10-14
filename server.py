@@ -137,7 +137,8 @@ def init_db():
                           ("outreached", "INTEGER DEFAULT 0"), ("outreached_by", "TEXT"), ("outreached_at", "TEXT"),
                           ("outreach_from", "TEXT"),   # our X account the last message went from
                           # paid / not paid set by hand (NULL = automatic: paid once they have a paid post with us)
-                          ("paid_status", "TEXT"), ("paid_status_by", "TEXT"), ("paid_status_at", "TEXT")]:
+                          ("paid_status", "TEXT"), ("paid_status_by", "TEXT"), ("paid_status_at", "TEXT"),
+                          ("usa_pct", "REAL")]:   # audience demographics typed by hand: % of their audience in the USA
             add_col("creators", col, decl)
         # Their own recent posts, pasted as links when X won't list the timeline (no login). Read like wave posts.
         c.execute("""CREATE TABLE IF NOT EXISTS sample_posts (
@@ -932,7 +933,7 @@ def creators_view(enqueue_stale=True):
             # when they joined our list: added by hand to vet, else their first post for us
             "added_at": pr.get("added_at") or r.get("first_post"),
             "outreached": bool(pr.get("outreached")), "outreached_by": pr.get("outreached_by"), "outreached_at": pr.get("outreached_at"),
-            "outreach_from": pr.get("outreach_from") or None,
+            "outreach_from": pr.get("outreach_from") or None, "usa_pct": pr.get("usa_pct"),
             # paid / not paid: set by hand wins, else paid once they have a paid post with us
             "paid_status": pr.get("paid_status") if pr.get("paid_status") in PAID_STATUSES else ("paid" if r["paid"] > 0 else "not_paid"),
             "paid_status_manual": pr.get("paid_status") in PAID_STATUSES,
@@ -1033,8 +1034,15 @@ def delete_creators(keys):
 
 
 def set_creator_stats(key, fields, source="manual"):
-    allowed = {"followers", "median_views", "median_likes", "median_eng", "median_er", "sample_size", "baseline_note", "name"}
+    allowed = {"followers", "median_views", "median_likes", "median_eng", "median_er", "sample_size", "baseline_note", "name", "usa_pct"}
     fields = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if "usa_pct" in fields:
+        try:
+            fields["usa_pct"] = float(fields["usa_pct"])
+        except (TypeError, ValueError):
+            raise ValueError("USA share must be a number")
+        if not 0 <= fields["usa_pct"] <= 100:
+            raise ValueError("USA share is a percent: 0–100")
     if not fields:
         raise ValueError("nothing to set")
     platform, _, handle = key.partition(":")

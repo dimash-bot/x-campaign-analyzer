@@ -151,6 +151,7 @@ TOOLS = [
          "platform": {"type": "string", "enum": ["x", "linkedin", "other"], "description": "default x"},
          "followers": {"type": "integer"}, "median_views": {"type": "integer"}, "median_likes": {"type": "integer"},
          "median_er": {"type": "number", "description": "percent, e.g. 1.8"},
+         "usa_pct": {"type": "number", "description": "share of their audience in the USA, percent 0-100"},
          "sample_size": {"type": "integer", "description": "how many recent posts the medians are based on"},
          "note": {"type": "string", "description": "where the numbers came from, e.g. 'last 20 posts via scraper'"}}}},
     {"name": "get_posts", "description": "Every post in a campaign with cost, note and metrics.",
@@ -227,7 +228,7 @@ def call_tool(app, user, name, args):
         return app.set_paid_status(keys, args["status"], email)
     if name == "set_creator_stats":
         key = app.creator_key(args.get("platform") or "x", str(args["creator"]).lstrip("@"))
-        fields = {k: args.get(k) for k in ("followers", "median_views", "median_likes", "median_er", "sample_size")}
+        fields = {k: args.get(k) for k in ("followers", "median_views", "median_likes", "median_er", "sample_size", "usa_pct")}
         fields["baseline_note"] = args.get("note")
         return app.set_creator_stats(key, fields, source="claude")
     if name == "import_users":
