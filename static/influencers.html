@@ -131,6 +131,27 @@ button.x:hover { color: var(--bad); background: transparent; }
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-sizing: border-box; }
 .modal .row { justify-content: flex-end; margin-top: 12px; }
 .modal .msg { margin-right: auto; font-size: 12.5px; color: var(--muted); }
+.mail { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 1px 6px; font-size: 12px; cursor: pointer; margin-left: 4px; }
+.mail:hover { border-color: var(--accent); color: var(--accent); }
+.from { display: block; font-size: 11px; color: var(--muted); }
+select.paid { font-size: 12px; padding: 2px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); }
+select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--border)); font-weight: 600; }
+.auto { display: block; font-size: 10.5px; color: var(--muted); }
+#msgDlg .modal { width: min(640px, 100%); max-height: calc(100vh - 32px); overflow: auto; }
+#msgDlg label.f { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+#msgDlg input, #msgDlg select { width: 100%; box-sizing: border-box; }
+#msgDlg textarea { min-height: 130px; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.to { display: flex; gap: 10px; align-items: center; background: var(--surface-2); border-radius: 10px; padding: 8px 10px; }
+.to img, .to .ph { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex: none; }
+.to b { display: block; } .to small { color: var(--muted); }
+.to .q { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.hist { margin-top: 10px; font-size: 12px; border-top: 1px solid var(--border); padding-top: 8px; max-height: 140px; overflow: auto; }
+.hist div { padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.hist div:last-child { border-bottom: none; }
+.hist .m { color: var(--muted); white-space: pre-wrap; }
+.tplrow { display: flex; gap: 6px; } .tplrow select { flex: 1; }
+.tplrow button { white-space: nowrap; }
+.hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -159,6 +180,7 @@ button.x:hover { color: var(--bad); background: transparent; }
       <select id="wave"><option value="">All waves</option></select>
       <select id="plat"><option value="">All platforms</option><option value="x">X</option><option value="linkedin">LinkedIn</option><option value="other">Other</option></select>
       <select id="out" title="Have we texted / DMed them?"><option value="">Outreach: all</option><option value="yes">Outreached</option><option value="no">Not outreached yet</option></select>
+      <select id="paidF" title="Have we paid them?"><option value="">Paid: all</option><option value="paid">Paid</option><option value="not_paid">Not paid</option></select>
       <span class="row chips" id="chips">
         <button data-p="added_at">Newest added</button>
         <button data-p="followers">Most followers</button>
@@ -171,6 +193,7 @@ button.x:hover { color: var(--bad); background: transparent; }
       </span>
       <span style="flex:1"></span>
       <button id="refresh" hidden title="Re-fetch followers and recent posts from X (admins only)">↻ Refresh profiles</button>
+      <button id="msgSel" hidden title="Write one message and send it to each selected creator in turn">✉ Message selected</button>
       <button id="outSel" hidden title="Tick 'Outreached' for every selected creator">Mark outreached</button>
       <button id="delSel" class="danger" hidden>Delete selected</button>
       <button id="addBtn" class="primary" title="Paste a list of X accounts to check their quality before paying them">+ Add influencers</button>
@@ -181,6 +204,7 @@ button.x:hover { color: var(--bad); background: transparent; }
           <th class="l"><label class="pick" title="Select all shown"><input type="checkbox" id="selAll">#</label></th>
           <th class="l" data-sort="name">Creator</th>
           <th class="l" data-sort="outreached" title="Tick once we've texted / DMed them">Outreached</th>
+          <th class="l" data-sort="paid_status" title="Have we paid them? Automatic once they have a paid post with us; change it by hand any time">Paid</th>
           <th class="l" data-sort="added_at" title="When they joined our list: added by hand to vet, or their first post for us">Added</th>
           <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
           <th data-sort="bot_followers_pct" title="Share of their 200 newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
@@ -215,6 +239,36 @@ button.x:hover { color: var(--bad); background: transparent; }
       Hover the badge for the full explanation.
     </div>
   </section>
+</div>
+
+<div class="overlay" id="msgDlg">
+  <form class="modal" id="msgForm" role="dialog" aria-modal="true" aria-labelledby="msgTitle">
+    <h3 id="msgTitle">Message creator</h3>
+    <p>Pick the X account you're sending from (be logged into it on x.com), write or pick a template, then
+      <b>Open DM in X</b>: the chat opens with your text filled in — press send there. Every message is logged here
+      with the account it went from.</p>
+    <div class="to" id="msgTo"></div>
+    <label class="f" for="msgFrom">Sending from (our X account)</label>
+    <input id="msgFrom" list="senderList" placeholder="@naceai" autocomplete="off" required>
+    <datalist id="senderList"></datalist>
+    <label class="f" for="msgTpl">Template</label>
+    <div class="tplrow">
+      <select id="msgTpl"><option value="">— no template —</option></select>
+      <button type="button" id="tplSave" title="Save the message below as a template for the team">Save as template</button>
+      <button type="button" id="tplDel" class="danger" title="Delete this template">✕</button>
+    </div>
+    <label class="f" for="msgText">Message</label>
+    <textarea id="msgText" placeholder="Hey {first_name}! We're Nace AI…"></textarea>
+    <div class="hint">{name}, {first_name} and {handle} are filled in for each creator. <span id="msgLen"></span></div>
+    <div class="hist" id="msgHist" hidden></div>
+    <div class="row">
+      <span class="msg" id="msgMsg"></span>
+      <button type="button" id="msgClose">Close</button>
+      <button type="button" id="msgSkip" title="Go to the next creator without logging">Skip</button>
+      <button type="button" id="msgLogOnly" title="Already sent it another way: just log it">Log only</button>
+      <button type="submit" class="primary" id="msgSend">Open DM in X</button>
+    </div>
+  </form>
 </div>
 
 <div class="overlay" id="addDlg">
@@ -289,7 +343,7 @@ async function api(path, body) {
 function visible() {
   const q = $("q").value.trim().toLowerCase(), w = $("wave").value, p = $("plat").value, o = $("out").value;
   return D.creators.filter((c) => (!q || `${c.name} ${c.handle}`.toLowerCase().includes(q)) && (!w || (w === "__prospect" ? c.prospect : c.waves.includes(w))) && (!p || c.platform === p)
-    && (!o || (o === "yes") === !!c.outreached));
+    && (!o || (o === "yes") === !!c.outreached) && (!$("paidF").value || c.paid_status === $("paidF").value));
 }
 
 function sorted(list) {
@@ -324,7 +378,7 @@ function render() {
   const withMed = V.filter((c) => ok(c.vs_median));
   $("kpis").innerHTML = [
     k("Influencers", V.length.toLocaleString(), `${V.filter((c) => c.waves.length > 1).length} used in more than one wave`),
-    k("Outreached", `${V.filter((c) => c.outreached).length} / ${V.length}`, `${V.filter((c) => !c.outreached).length} not texted yet`),
+    k("Outreached", `${V.filter((c) => c.outreached).length} / ${V.length}`, `${V.filter((c) => !c.outreached).length} not texted yet · ${V.filter((c) => c.paid_status === "paid").length} paid`),
     k("Good / test / bad", ["good", "test", "bad"].map((v) => V.filter((c) => c.quality?.verdict === v).length).join(" / "),
       `${V.filter((c) => c.quality?.verdict === "partial").length} profile-only (need post numbers)`),
     k("Combined followers", fmtN(V.reduce((s, c) => s + (c.followers || 0), 0)), `median ${fmtN(med(V.map((c) => c.followers)))} each`),
@@ -355,9 +409,10 @@ function render() {
       <td class="l"><div class="who">
         ${c.avatar ? `<img src="${esc(c.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="ph">${esc(initials)}</span>`}
         <div><a href="${esc(link)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.verified ? ` <span title="Verified" class="muted">✓</span>` : ""}<span class="badge">${PLAT[c.platform]}</span>${note}${c.prospect ? `<button class="x" title="Remove from the list" data-remove="${esc(c.key)}">✕</button>` : ""}
-          <small>${c.platform === "x" ? "@" + esc(c.handle) + " · " : ""}${c.prospect ? `<span class="prospectchip">not paid yet</span>` : c.waves.map((w) => `<span class="wavechip">${esc(w)}</span>`).join("")}</small></div>
+          <small>${c.platform === "x" ? "@" + esc(c.handle) + " · " : ""}${c.prospect ? `<span class="prospectchip">no posts yet</span>` : c.waves.map((w) => `<span class="wavechip">${esc(w)}</span>`).join("")}</small></div>
       </div></td>
-      <td class="l"><label class="out${c.outreached ? " on" : ""}" title="${c.outreached ? `Outreached by ${esc(c.outreached_by || "?")} on ${c.outreached_at ? new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "?"} — untick to clear` : "Tick once we've texted / DMed them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<small>${esc((c.outreached_by || "").split("@")[0])}${c.outreached_at ? " · " + new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}</small>` : ""}</label></td>
+      <td class="l"><label class="out${c.outreached ? " on" : ""}" title="${c.outreached ? `Outreached by ${esc(c.outreached_by || "?")} on ${c.outreached_at ? new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "?"} — untick to clear` : "Tick once we've texted / DMed them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<small>${esc((c.outreached_by || "").split("@")[0])}${c.outreached_at ? " · " + new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}</small>` : ""}</label><button class="mail" data-msg="${esc(c.key)}" title="Write a DM to ${esc(c.platform === "x" ? "@" + c.handle : c.name)}">✉</button>${c.outreach_from ? `<span class="from" title="${c.messages} message${c.messages === 1 ? "" : "s"} logged">from @${esc(c.outreach_from)}${c.messages > 1 ? " · " + c.messages + " msgs" : ""}</span>` : ""}</td>
+      <td class="l"><select class="paid ${c.paid_status === "paid" ? "yes" : ""}" data-paid="${esc(c.key)}" title="${c.paid_status_manual ? `Set by ${esc(c.paid_status_by || "?")}` : "Automatic: paid once they have a paid post with us"}"><option value="paid" ${c.paid_status === "paid" ? "selected" : ""}>Paid</option><option value="not_paid" ${c.paid_status === "not_paid" ? "selected" : ""}>Not paid</option>${c.paid_status_manual ? `<option value="auto">↺ Auto</option>` : ""}</select>${c.paid_status_manual ? "" : `<span class="auto">auto</span>`}</td>
       <td class="l muted" title="${c.added_at ? new Date(c.added_at).toLocaleString() : ""}">${c.added_at ? new Date(c.added_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</td>
       <td class="l">${pend ? `<span class="fetching">analyzing…</span>`
         : `<span class="pill ${q.verdict}" tabindex="0" data-tip="${esc(c.key)}">${{ good: "Good", test: "Test", bad: "Bad", partial: "Profile only" }[q.verdict]}${q.manual ? " · by hand" : reasons.length ? ` · ${reasons.length}` : ""}</span>`
@@ -377,7 +432,7 @@ function render() {
       <td>${fmt$(c.cpe)}</td>
       <td>${fmt$(c.price_per_1k_followers)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="18" class="empty">No influencers match.</td></tr>`;
+  }).join("") : `<tr><td colspan="19" class="empty">No influencers match.</td></tr>`;
   syncPicked();
 }
 
@@ -405,7 +460,7 @@ $("chips").addEventListener("click", (e) => {
   try { localStorage.setItem("xca_csort2", JSON.stringify(sort)); } catch (err) {}
   render();
 });
-["q", "wave", "plat", "out"].forEach((id) => $(id).addEventListener("input", render));
+["q", "wave", "plat", "out", "paidF"].forEach((id) => $(id).addEventListener("input", render));
 // Outreach tick box: saved right away, remembers who ticked it and when
 $("rows").addEventListener("change", async (e) => {
   const cb = e.target.closest("input[data-out]"); if (!cb) return;
@@ -428,6 +483,8 @@ function syncPicked() {
   $("selAll").indeterminate = !$("selAll").checked && shown.some((c) => picked.has(c.key));
   $("delSel").hidden = !picked.size;
   $("outSel").hidden = !picked.size;
+  $("msgSel").hidden = !picked.size;
+  $("msgSel").textContent = `✉ Message ${picked.size} selected`;
   $("outSel").textContent = `Mark ${picked.size} outreached`;
   $("delSel").textContent = `Delete ${picked.size} selected`;
 }
@@ -559,11 +616,122 @@ $("chkForm").addEventListener("submit", async (e) => {
   finally { $("chkOk").disabled = false; }
 });
 
+// ---- Outreach: compose a DM, open it prefilled on x.com, log who it went to and from which of our accounts
+const msgDlg = $("msgDlg");
+let msgQueue = [], msgIdx = 0, OUT = { senders: [], templates: [] };
+const fill = (t, c) => t.replace(/\{first_name\}/g, (c.name || c.handle || "").split(/\s+/)[0])
+  .replace(/\{name\}/g, c.name || c.handle || "").replace(/\{handle\}/g, c.platform === "x" ? "@" + c.handle : c.name || "");
+const msgCur = () => D.creators.find((c) => c.key === msgQueue[msgIdx]);
+function getPref(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+function setPref(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+async function openMsg(keys) {
+  msgQueue = keys; msgIdx = 0;
+  $("msgMsg").textContent = "";
+  try { OUT = await api("/api/outreach"); } catch (e) { /* still usable without history */ }
+  $("senderList").innerHTML = OUT.senders.map((s) => `<option value="@${esc(s)}">`).join("");
+  if (!$("msgFrom").value) $("msgFrom").value = getPref("xca_sender") || (OUT.senders[0] ? "@" + OUT.senders[0] : "");
+  renderTpls(getPref("xca_tpl"));
+  if (!$("msgText").value) { const t = OUT.templates.find((t) => String(t.id) === $("msgTpl").value); if (t) $("msgText").value = t.body; }
+  msgDlg.classList.add("open");
+  showMsg();
+}
+function renderTpls(sel) {
+  $("msgTpl").innerHTML = `<option value="">— no template —</option>` + OUT.templates.map((t) =>
+    `<option value="${t.id}" ${String(t.id) === String(sel) ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("tplDel").hidden = !$("msgTpl").value;
+}
+function showMsg() {
+  const c = msgCur();
+  if (!c) { msgDlg.classList.remove("open"); load(); return; }
+  const initials = (c.name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  $("msgTo").innerHTML = `${c.avatar ? `<img src="${esc(c.avatar)}" alt="" referrerpolicy="no-referrer">` : `<span class="ph">${esc(initials)}</span>`}
+    <div><b>${esc(c.name)}</b><small>${c.platform === "x" ? "@" + esc(c.handle) : PLAT[c.platform]} · ${fmtN(c.followers)} followers · ${c.paid_status === "paid" ? "paid" : "not paid"}</small></div>
+    <span class="q">${msgQueue.length > 1 ? `${msgIdx + 1} of ${msgQueue.length}` : ""}</span>`;
+  $("msgTitle").textContent = `Message ${c.platform === "x" ? "@" + c.handle : c.name}`;
+  $("msgSkip").hidden = msgQueue.length < 2;
+  $("msgSend").textContent = c.platform === "x" ? "Open DM in X" : "Copy text & open";
+  const mine = (OUT.log || []).filter((l) => l.creator_key === c.key);
+  $("msgHist").hidden = !mine.length;
+  $("msgHist").innerHTML = mine.length ? `<b>Already contacted ${mine.length}×</b>` + mine.map((l) =>
+    `<div>${new Date(l.sent_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} · from <b>@${esc(l.sender)}</b> by ${esc((l.sent_by || "").split("@")[0])}
+      ${l.message ? `<div class="m">${esc(l.message.slice(0, 280))}</div>` : ""}</div>`).join("") : "";
+  updLen();
+}
+function updLen() {
+  const c = msgCur(); if (!c) return;
+  const n = fill($("msgText").value, c).length;
+  $("msgLen").textContent = n ? `${n} characters` : "";
+}
+async function sendMsg(openX) {
+  const c = msgCur(); if (!c) return;
+  const sender = $("msgFrom").value.trim();
+  if (!sender) { $("msgMsg").textContent = "Which of our X accounts are you sending from?"; $("msgFrom").focus(); return; }
+  const text = fill($("msgText").value, c);
+  if (openX) {
+    // must open synchronously in the click, or the browser blocks the new tab
+    if (c.platform === "x" && c.user_id) {
+      window.open(`https://x.com/messages/compose?recipient_id=${encodeURIComponent(c.user_id)}&text=${encodeURIComponent(text)}`, "_blank", "noopener");
+    } else {
+      navigator.clipboard?.writeText(text).catch(() => {});
+      window.open(c.platform === "x" ? `https://x.com/${encodeURIComponent(c.handle)}` : (c.post_urls[0] || "about:blank"), "_blank", "noopener");
+    }
+  }
+  setPref("xca_sender", sender);
+  try {
+    await api("/api/outreach/log", { key: c.key, sender, message: text });
+    OUT.log = [{ creator_key: c.key, sender: sender.replace(/^@/, ""), message: text, sent_at: new Date().toISOString(), sent_by: "you" }, ...(OUT.log || [])];
+    const note = openX && !(c.platform === "x" && c.user_id) ? " — text copied, paste it into their DMs" : "";
+    $("msgMsg").textContent = `Logged: ${c.platform === "x" ? "@" + c.handle : c.name} from ${sender.startsWith("@") ? sender : "@" + sender}${note}`;
+    picked.delete(c.key);
+    msgIdx++;
+    if (msgIdx < msgQueue.length) showMsg(); else setTimeout(() => { msgDlg.classList.remove("open"); load(); }, openX ? 600 : 300);
+  } catch (err) { $("msgMsg").textContent = "Couldn't log: " + err.message; }
+}
+$("rows").addEventListener("click", (e) => { const b = e.target.closest("[data-msg]"); if (b) openMsg([b.dataset.msg]); });
+$("msgSel").onclick = () => openMsg(D.creators.filter((c) => picked.has(c.key)).map((c) => c.key));
+$("msgForm").addEventListener("submit", (e) => { e.preventDefault(); sendMsg(true); });
+$("msgLogOnly").onclick = () => sendMsg(false);
+$("msgSkip").onclick = () => { msgIdx++; showMsg(); };
+$("msgClose").onclick = () => { msgDlg.classList.remove("open"); load(); };
+msgDlg.addEventListener("click", (e) => { if (e.target === msgDlg) { msgDlg.classList.remove("open"); load(); } });
+$("msgText").addEventListener("input", updLen);
+$("msgTpl").addEventListener("change", () => {
+  const t = OUT.templates.find((t) => String(t.id) === $("msgTpl").value);
+  if (t) $("msgText").value = t.body;
+  setPref("xca_tpl", $("msgTpl").value); $("tplDel").hidden = !t; updLen();
+});
+$("tplSave").onclick = async () => {
+  const body = $("msgText").value.trim();
+  if (!body) { $("msgMsg").textContent = "Write the message first"; return; }
+  const cur = OUT.templates.find((t) => String(t.id) === $("msgTpl").value);
+  const name = prompt("Template name", cur?.name || "First outreach");
+  if (!name) return;
+  try {
+    const r = await api("/api/outreach/templates/save", { name, body });
+    OUT = { ...OUT, templates: (await api("/api/outreach")).templates };
+    renderTpls(r.id); setPref("xca_tpl", String(r.id));
+    $("msgMsg").textContent = `Template "${name}" saved for the team`;
+  } catch (err) { $("msgMsg").textContent = "Couldn't save: " + err.message; }
+};
+$("tplDel").onclick = async () => {
+  const t = OUT.templates.find((t) => String(t.id) === $("msgTpl").value);
+  if (!t || !confirm(`Delete template "${t.name}" for everyone?`)) return;
+  await api("/api/outreach/templates/delete", { id: t.id });
+  OUT.templates = OUT.templates.filter((x) => x.id !== t.id); renderTpls(""); setPref("xca_tpl", "");
+};
+// Paid / not paid
+$("rows").addEventListener("change", async (e) => {
+  const sel = e.target.closest("select[data-paid]"); if (!sel) return;
+  try { await api("/api/creators/paid", { key: sel.dataset.paid, status: sel.value }); sel.blur(); load(); }
+  catch (err) { sel.style.borderColor = "var(--bad)"; sel.title = "Couldn't save: " + err.message; }
+});
+
 const addDlg = $("addDlg");
 $("addBtn").onclick = () => { $("addMsg").textContent = ""; addDlg.classList.add("open"); $("addText").focus(); };
 $("addCancel").onclick = () => addDlg.classList.remove("open");
 addDlg.addEventListener("click", (e) => { if (e.target === addDlg) addDlg.classList.remove("open"); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { addDlg.classList.remove("open"); chkDlg.classList.remove("open"); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { addDlg.classList.remove("open"); chkDlg.classList.remove("open"); if (msgDlg.classList.contains("open")) { msgDlg.classList.remove("open"); load(); } } });
 $("addForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("addOk").disabled = true;

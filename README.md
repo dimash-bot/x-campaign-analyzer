@@ -74,6 +74,11 @@ The app exposes an MCP server at `https://<your-railway-domain>/mcp`, so Claude 
 posts, else their median), prices (typed, quote, or past pay) and projects registrations / API users from past waves.
 Drafts are saved for the whole team.
 
+**Outreach** (Influencers → ✉): write a DM (team templates with {first_name}/{name}/{handle}), pick which of our X
+accounts it goes from, and "Open DM in X" opens x.com with the text prefilled — you press send there. Each message is
+logged (who, from which account, when); the Outreached column shows "from @account". **Paid** column: automatic once
+a creator has a paid post with us, or set by hand.
+
 Tools: `list_campaigns`, `create_campaign`, `rename_campaign`, `add_posts`, `update_post`, `remove_post`,
 `set_other_spend`, `refresh_metrics`, `import_users`, `get_report`, `get_posts`.
 

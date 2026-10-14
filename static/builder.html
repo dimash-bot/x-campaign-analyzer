@@ -176,8 +176,10 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
           <option value="partial">Profile only</option><option value="bad">Bad</option>
         </select>
         <select id="fHist" title="Have we paid them before?">
-          <option value="">New + repeat</option><option value="repeat">Paid before</option><option value="new">Never paid</option>
+          <option value="">New + repeat</option><option value="repeat">Posted for us before</option><option value="new">Never posted for us</option>
         </select>
+        <select id="fPaid" title="Paid status"><option value="">Paid + not paid</option><option value="paid">Paid</option><option value="not_paid">Not paid</option></select>
+        <select id="fOut" title="Outreach"><option value="">Any outreach</option><option value="yes">Outreached</option><option value="no">Not outreached</option></select>
       </div>
       <div class="chips" id="quick" style="margin-bottom:10px">
         <span class="chip" data-quick="good">+ All good</span>
@@ -188,6 +190,7 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
           <thead><tr>
             <th></th><th data-sort="handle">Creator</th>
             <th class="l" data-sort="outreached"><span class="grp">Status</span>Outreached</th>
+            <th class="l" data-sort="paid_status"><span class="grp">Status</span>Paid</th>
             <th class="l" data-sort="added_at"><span class="grp">Status</span>Added</th>
             <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
             <th data-sort="bot_followers_pct" title="Share of their newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
@@ -281,7 +284,9 @@ function renderPicker() {
   const q = $("q").value.trim().toLowerCase(), fv = $("fVerdict").value, fh = $("fHist").value;
   let V = C.filter((c) => (!q || (c.handle + " " + c.name).toLowerCase().includes(q))
     && (!fv || (c.quality?.verdict || "partial") === fv)
-    && (!fh || (fh === "new" ? !c.posts : c.posts > 0)));
+    && (!fh || (fh === "new" ? !c.posts : c.posts > 0))
+    && (!$("fPaid").value || c.paid_status === $("fPaid").value)
+    && (!$("fOut").value || ($("fOut").value === "yes") === !!c.outreached));
   const d = sort.dir === "asc" ? 1 : -1;
   V.sort((a, b) => {
     const x = a[sort.key], y = b[sort.key];
@@ -295,7 +300,8 @@ function renderPicker() {
     return `<tr class="${on ? "in" : ""}">
       <td><button class="add" data-toggle="${esc(c.key)}" title="${on ? "Remove from plan" : "Add to plan"}">${on ? "✓" : "+"}</button></td>
       <td>${who(c)}</td>
-      <td class="l">${c.outreached ? `<span title="${esc((c.outreached_by || "") + " " + (c.outreached_at || ""))}">✓ ${c.outreached_at ? fmtD(c.outreached_at) : ""}</span>` : `<span class="muted">—</span>`}</td>
+      <td class="l">${c.outreached ? `<span title="${esc((c.outreached_by || "") + " " + (c.outreached_at || ""))}">✓ ${c.outreached_at ? fmtD(c.outreached_at) : ""}</span>${c.outreach_from ? `<span class="src">from @${esc(c.outreach_from)}</span>` : ""}` : `<span class="muted">—</span>`}</td>
+      <td class="l">${c.paid_status === "paid" ? `<span class="badge good">Paid</span>` : `<span class="badge">Not paid</span>`}</td>
       <td class="l">${c.added_at ? fmtD(c.added_at) : "—"}</td>
       <td class="l"><span class="badge ${v}" title="${esc([...(c.quality?.kills || []), ...(c.quality?.flags || [])].join("\n"))}">${QLABEL[v]}</span></td>
       <td class="${c.bot_followers_pct > 50 ? "bad" : c.bot_followers_pct > 40 ? "warn" : ""}">${ok(c.bot_followers_pct) ? c.bot_followers_pct.toFixed(0) + "%" : "—"}</td>
@@ -314,7 +320,7 @@ function renderPicker() {
       <td>${fmt$(c.def_price)}<span class="src">${esc(c.price_src)}</span></td>
       <td>${fmt$(c.exp_cpm, 2)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="20" class="empty">No creators match.</td></tr>`;
+  }).join("") : `<tr><td colspan="21" class="empty">No creators match.</td></tr>`;
   $("pickCount").textContent = `${V.length} of ${C.length} creators shown · ${plan.items.length} in the plan`;
 }
 
@@ -443,7 +449,7 @@ document.querySelectorAll("th[data-sort]").forEach((th) => th.addEventListener("
     : { key: k, dir: ["handle", "exp_cpm", "def_price", "cpm", "price_per_1k_followers", "bot_followers_pct"].includes(k) ? "asc" : "desc" };
   store.set("xca_bsort2", sort); renderPicker();
 }));
-["q", "fVerdict", "fHist"].forEach((id) => $(id).addEventListener("input", renderPicker));
+["q", "fVerdict", "fHist", "fPaid", "fOut"].forEach((id) => $(id).addEventListener("input", renderPicker));
 $("bench").addEventListener("change", () => { store.set("xca_bench", $("bench").value); renderPlan(); });
 $("name").addEventListener("input", () => { plan.name = $("name").value; setDirty(); });
 $("notes").addEventListener("input", () => { plan.notes = $("notes").value; setDirty(); });
@@ -521,7 +527,7 @@ async function load() {
   renderPlans(); render();
 }
 api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
-load().catch((e) => { $("pick").innerHTML = `<tr><td colspan="20" class="empty">Couldn't load: ${esc(e.message)}</td></tr>`; });
+load().catch((e) => { $("pick").innerHTML = `<tr><td colspan="21" class="empty">Couldn't load: ${esc(e.message)}</td></tr>`; });
 </script>
 </body>
 </html>
