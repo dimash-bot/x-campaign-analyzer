@@ -726,6 +726,24 @@ def sample_counts():
 
 # ---------------------------------------------------------------- agencies
 
+# Our X accounts that do outreach (the "Contacted from" dropdown). "name" or "name=xhandle" (the handle adds a link).
+OUTREACH_ACCOUNTS = [a.strip() for a in os.environ.get("OUTREACH_ACCOUNTS", "aiza,maiya,dimash,nace").split(",") if a.strip()]
+
+
+def outreach_accounts(c=None):
+    """Dropdown options: the configured accounts, plus any other value already saved on a creator."""
+    out = []
+    for a in OUTREACH_ACCOUNTS:
+        name, _, handle = a.partition("=")
+        out.append({"name": name.strip(), "handle": handle.strip().lstrip("@") or None})
+    known = {a["name"].lower() for a in out}
+    rows = c.execute("SELECT DISTINCT outreach_from FROM creators WHERE outreach_from IS NOT NULL AND outreach_from != ''") if c else []
+    for (v,) in rows:
+        if v.lower() not in known:
+            out.append({"name": v, "handle": None}); known.add(v.lower())
+    return out
+
+
 OWN_HANDLES = {h.strip().lower() for h in os.environ.get("OWN_HANDLES", "naceai").split(",") if h.strip()}
 
 
@@ -939,8 +957,9 @@ def creators_view(enqueue_stale=True):
         busy = {p.split(":", 1)[1].rsplit(":", 1)[0] for p in _pending if isinstance(p, str) and p.startswith("s:")}
         pend = [r["key"] for r in out if r["key"] in _pending or r["key"] in busy or r["key"] in _apify_busy
                 or "f:" + r["key"] in _apify_busy]
-    senders = sorted({r["outreach_from"] for r in out if r["outreach_from"]}, key=str.lower)
-    return {"creators": out, "senders": senders, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0")),
+    with db() as c:
+        accounts = outreach_accounts(c)
+    return {"creators": out, "accounts": accounts, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0")),
             "apify": apify_client.enabled()}
 
 
@@ -1116,6 +1135,25 @@ def save_plan(name, items, notes=None, email=None, plan_id=None):
         return {"id": cur.lastrowid, "name": name, "items": len(clean)}
 
 
+def set_plan_price(plan_id, key, price, email=None):
+    """Change one creator's planned price in a plan (from the wave's roster or the builder). Empty = use the default."""
+    try:
+        price = None if price in (None, "") else max(0.0, float(price))
+    except (TypeError, ValueError):
+        raise ValueError("price must be a number")
+    with _db_lock, db() as c:
+        row = c.execute("SELECT items FROM plans WHERE id=?", (int(plan_id),)).fetchone()
+        if not row:
+            raise ValueError("plan not found")
+        items = json.loads(row["items"] or "[]")
+        hit = [i for i in items if i.get("key") == key]
+        if not hit:
+            raise ValueError("creator is not in this plan")
+        hit[0]["price"] = price
+        c.execute("UPDATE plans SET items=?, updated_at=?, updated_by=? WHERE id=?", (json.dumps(items), now(), email, int(plan_id)))
+    return {"plan_id": int(plan_id), "key": key, "price": price}
+
+
 def plan_to_wave(plan_id, email=None):
     """Turn a builder plan into a wave on the Waves page. The wave shows the plan's creators as its roster
     (outreach status, DM link, account used); their posts are added to the wave as usual once they're live."""
@@ -1141,7 +1179,7 @@ def wave_roster(c, campaign_id):
     items = json.loads(plan["items"] or "[]")
     keys = [i["key"] for i in items]
     if not keys:
-        return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": []}
+        return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": [], "accounts": outreach_accounts(c)}
     qs = ",".join("?" * len(keys))
     prof = {r["key"]: dict(r) for r in c.execute(f"SELECT * FROM creators WHERE key IN ({qs})", keys)}
     posted, paid_any, want, spent = {}, set(), set(keys), {}
@@ -1169,8 +1207,7 @@ def wave_roster(c, campaign_id):
                     "outreached_at": pr.get("outreached_at"), "outreach_from": pr.get("outreach_from") or None,
                     "paid_status": pr["paid_status"] if manual else ("paid" if k in paid_any else "not_paid"),
                     "paid_status_manual": manual, "posted": posted.get(k, 0)})
-    senders = [r[0] for r in c.execute("SELECT DISTINCT outreach_from FROM creators WHERE outreach_from IS NOT NULL AND outreach_from != '' ORDER BY 1")]
-    return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": out, "senders": senders}
+    return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": out, "accounts": outreach_accounts(c)}
 
 
 def delete_plan(plan_id):
@@ -1741,6 +1778,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, save_plan(b.get("name"), b.get("items"), (b.get("notes") or "").strip() or None,
                                                  user.get("email"), b.get("id")))
             except (ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
+        if path == "/api/plans/price":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, set_plan_price(b["plan_id"], b["key"], b.get("price"), user.get("email")))
+            except (KeyError, ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/plans/to_wave":
             b = json.loads(self._body_bytes() or b"{}")

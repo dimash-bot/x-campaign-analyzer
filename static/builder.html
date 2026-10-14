@@ -104,7 +104,7 @@ tr.in .add { background: var(--accent); border-color: var(--accent); color: var(
 .x:hover { color: var(--bad); background: none; }
 .otick { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px; }
 .acct { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
-.acct input { width: 108px; font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+.acct select { font-size: 12px; padding: 2px 6px; border-radius: 6px; }
 .acct a, a.sl { color: var(--accent); text-decoration: none; }
 .ost { display: block; font-size: 11px; color: var(--muted); } .ost.on { color: var(--good); }
 .wavebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); font-size: 13px; }
@@ -240,7 +240,6 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
   </div>
 </div>
 
-<datalist id="senderList"></datalist>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -466,13 +465,23 @@ $("waveBar").addEventListener("click", async (e) => {
   } catch (err) { $("status").textContent = "Couldn't create the wave: " + err.message; $("status").className = "status dirty"; }
 });
 // Outreached tick + which of our X accounts contacted them (same fields as on Influencers)
-const lastSender = () => { try { return localStorage.getItem("xca_sender") || ""; } catch (e) { return ""; } };
+// "Contacted from": one of our outreach accounts (dropdown; set on the server with OUTREACH_ACCOUNTS)
+let ACCTS = [];
+function acctSel(key, cur) {
+  const opts = [...ACCTS];
+  if (cur && !opts.some((a) => a.name.toLowerCase() === cur.toLowerCase())) opts.push({ name: cur });
+  const a = opts.find((a) => cur && a.name.toLowerCase() === cur.toLowerCase());
+  return `<select data-acct="${esc(key)}" title="Which of our accounts contacted them"><option value="">— pick —</option>${opts.map((o) =>
+    `<option value="${esc(o.name)}" ${a === o ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>`
+    + (a?.handle ? `<a href="https://x.com/${encodeURIComponent(a.handle)}" target="_blank" rel="noopener" title="@${esc(a.handle)} on X">↗</a>` : "");
+}
+const lastSender = () => { let v = ""; try { v = localStorage.getItem("xca_sender") || ""; } catch (e) {} return ACCTS.some((a) => a.name === v) ? v : ""; };
 function outCell(c) {
   return `<label class="otick" title="${c.outreached ? esc(`by ${c.outreached_by || "?"}`) : "Tick once we've contacted them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<span class="ost on">outreached</span>` : `<span class="ost">not contacted</span>`}</label>`
-    + (c.outreached ? `<span class="acct"><input data-acct="${esc(c.key)}" list="senderList" value="${c.outreach_from ? "@" + esc(c.outreach_from) : ""}" placeholder="from @account" title="Which of our X accounts contacted them">${c.outreach_from ? `<a href="https://x.com/${encodeURIComponent(c.outreach_from)}" target="_blank" rel="noopener" title="Open @${esc(c.outreach_from)} on X">↗</a>` : ""}</span>` : "");
+    + (c.outreached ? `<span class="acct">${acctSel(c.key, c.outreach_from)}</span>` : "");
 }
 $("plan").addEventListener("change", async (e) => {
-  const cb = e.target.closest("input[data-out]"), ac = e.target.closest("input[data-acct]");
+  const cb = e.target.closest("input[data-out]"), ac = e.target.closest("select[data-acct]");
   if (!cb && !ac) return;
   e.stopPropagation();
   const v = ac ? ac.value.trim() : null;
@@ -487,7 +496,7 @@ $("plan").addEventListener("change", async (e) => {
 async function reload() {
   const cr = await api("/api/creators");
   C = cr.creators.map(enrich); byKey = Object.fromEntries(C.map((c) => [c.key, c]));
-  $("senderList").innerHTML = (cr.senders || []).map((s) => `<option value="@${esc(s)}">`).join("");
+  ACCTS = cr.accounts || [];
   render();
 }
 
@@ -587,7 +596,7 @@ window.addEventListener("beforeunload", (e) => { if (dirty && plan.items.length)
 async function load() {
   const [cr, rep, pl] = await Promise.all([api("/api/creators"), api("/api/report"), api("/api/plans")]);
   C = cr.creators.map(enrich); byKey = Object.fromEntries(C.map((c) => [c.key, c])); R = rep; PLANS = pl.plans;
-  $("senderList").innerHTML = (cr.senders || []).map((s) => `<option value="@${esc(s)}">`).join("");
+  ACCTS = cr.accounts || [];
   const waves = R.campaigns.filter((w) => w.registrations);
   const saved = store.get("xca_bench");
   $("bench").innerHTML = `<option value="all">All waves (${ok(R.totals.regs_per_1k_views) ? R.totals.regs_per_1k_views.toFixed(2) : "—"} regs / 1K views)</option>` +

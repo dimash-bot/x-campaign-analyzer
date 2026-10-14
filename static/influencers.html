@@ -145,7 +145,7 @@ button.x:hover { color: var(--bad); background: transparent; }
 .modal .row { justify-content: flex-end; margin-top: 12px; }
 .modal .msg { margin-right: auto; font-size: 12.5px; color: var(--muted); }
 .acct { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
-.acct input { width: 112px; font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+.acct select { font-size: 12px; padding: 2px 6px; border-radius: 6px; }
 .acct a { color: var(--accent); text-decoration: none; font-size: 12px; }
 select.paid { font-size: 12px; padding: 2px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); }
 select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--border)); font-weight: 600; }
@@ -283,7 +283,6 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
 
 <div class="qtip" id="qtip" role="tooltip"></div>
 
-<datalist id="senderList"></datalist>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -380,7 +379,7 @@ function render() {
         <div><a href="${esc(link)}" target="_blank" rel="noopener">${esc(c.name)}</a>${c.verified ? ` <span title="Verified" class="muted">✓</span>` : ""}<span class="badge">${PLAT[c.platform]}</span>${note}${c.prospect ? `<button class="x" title="Remove from the list" data-remove="${esc(c.key)}">✕</button>` : ""}
           <small>${c.platform === "x" ? "@" + esc(c.handle) + " · " : ""}${c.prospect ? `<span class="prospectchip">no posts yet</span>` : c.waves.map((w) => `<span class="wavechip">${esc(w)}</span>`).join("")}</small></div>
       </div></td>
-      <td class="l"><label class="out${c.outreached ? " on" : ""}" title="${c.outreached ? `Outreached by ${esc(c.outreached_by || "?")} on ${c.outreached_at ? new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "?"} — untick to clear` : "Tick once we've texted / DMed them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<small>${esc((c.outreached_by || "").split("@")[0])}${c.outreached_at ? " · " + new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}</small>` : ""}</label>${c.outreached ? `<span class="acct"><input data-acct="${esc(c.key)}" list="senderList" value="${c.outreach_from ? "@" + esc(c.outreach_from) : ""}" placeholder="from @account" title="Which of our X accounts contacted them">${c.outreach_from ? `<a href="https://x.com/${encodeURIComponent(c.outreach_from)}" target="_blank" rel="noopener" title="Open @${esc(c.outreach_from)} on X">↗</a>` : ""}</span>` : ""}</td>
+      <td class="l"><label class="out${c.outreached ? " on" : ""}" title="${c.outreached ? `Outreached by ${esc(c.outreached_by || "?")} on ${c.outreached_at ? new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "?"} — untick to clear` : "Tick once we've texted / DMed them"}"><input type="checkbox" data-out="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<small>${esc((c.outreached_by || "").split("@")[0])}${c.outreached_at ? " · " + new Date(c.outreached_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}</small>` : ""}</label>${c.outreached ? `<span class="acct">${acctSel(c.key, c.outreach_from)}</span>` : ""}</td>
       <td class="l"><select class="paid ${c.paid_status === "paid" ? "yes" : ""}" data-paid="${esc(c.key)}" title="${c.paid_status_manual ? `Set by ${esc(c.paid_status_by || "?")}` : "Automatic: paid once they have a paid post with us"}"><option value="paid" ${c.paid_status === "paid" ? "selected" : ""}>Paid</option><option value="not_paid" ${c.paid_status === "not_paid" ? "selected" : ""}>Not paid</option>${c.paid_status_manual ? `<option value="auto">↺ Auto</option>` : ""}</select>${c.paid_status_manual ? "" : `<span class="auto">auto</span>`}</td>
       <td class="l muted" title="${c.added_at ? new Date(c.added_at).toLocaleString() : ""}">${c.added_at ? new Date(c.added_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</td>
       <td class="l">${pend ? `<span class="fetching">analyzing…</span>`
@@ -410,7 +409,7 @@ async function load() {
   clearTimeout(timer);
   try {
     D = await api("/api/creators");
-    $("senderList").innerHTML = (D.senders || []).map((s) => `<option value="@${esc(s)}">`).join("");
+    ACCTS = D.accounts || [];
     for (const c of D.creators) c.qrank = { good: 3, test: 2, partial: 1, bad: 0 }[c.quality?.verdict] ?? 1;
     if (!editing()) render();
   } catch (e) {}
@@ -468,8 +467,10 @@ $("selAll").addEventListener("change", (e) => {
 });
 $("outSel").onclick = async () => {
   const keys = [...picked];
-  const sender = prompt(`Mark ${keys.length} outreached — from which of our X accounts?`, lastSender());
+  const names = ACCTS.map((a) => a.name);
+  let sender = prompt(`Mark ${keys.length} outreached — contacted from which account?\n${names.join(" / ")}`, lastSender());
   if (sender === null) return;
+  sender = names.find((n) => n.toLowerCase() === sender.trim().toLowerCase()) ?? sender;
   if (sender.trim()) try { localStorage.setItem("xca_sender", sender.trim()); } catch (err) {}
   try { await api("/api/creators/outreach", { keys, outreached: true, sender: sender.trim() || null }); picked.clear(); load(); }
   catch (err) { $("outSel").title = "Couldn't save: " + err.message; }
@@ -588,9 +589,19 @@ $("chkForm").addEventListener("submit", async (e) => {
 });
 
 // Which of our X accounts contacted them: typed next to the tick, remembered as the default for the next tick
-const lastSender = () => { try { return localStorage.getItem("xca_sender") || ""; } catch (e) { return ""; } };
+// "Contacted from": one of our outreach accounts (dropdown; set on the server with OUTREACH_ACCOUNTS)
+let ACCTS = [];
+function acctSel(key, cur) {
+  const opts = [...ACCTS];
+  if (cur && !opts.some((a) => a.name.toLowerCase() === cur.toLowerCase())) opts.push({ name: cur });
+  const a = opts.find((a) => cur && a.name.toLowerCase() === cur.toLowerCase());
+  return `<select data-acct="${esc(key)}" title="Which of our accounts contacted them"><option value="">— pick —</option>${opts.map((o) =>
+    `<option value="${esc(o.name)}" ${a === o ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>`
+    + (a?.handle ? `<a href="https://x.com/${encodeURIComponent(a.handle)}" target="_blank" rel="noopener" title="@${esc(a.handle)} on X">↗</a>` : "");
+}
+const lastSender = () => { let v = ""; try { v = localStorage.getItem("xca_sender") || ""; } catch (e) {} return ACCTS.some((a) => a.name === v) ? v : ""; };
 $("rows").addEventListener("change", async (e) => {
-  const el = e.target.closest("input[data-acct]"); if (!el) return;
+  const el = e.target.closest("select[data-acct]"); if (!el) return;
   const v = el.value.trim();
   try {
     await api("/api/creators/outreach", { key: el.dataset.acct, outreached: true, sender: v });
