@@ -1715,6 +1715,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/builder":
             with open(os.path.join(HERE, "static", "builder.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/colresize.js":
+            with open(os.path.join(HERE, "static", "colresize.js"), "rb") as f:
+                return self._send(200, f.read(), "text/javascript; charset=utf-8")
         if u.path == "/api/plans":
             return self._send(200, plans_list())
         if u.path == "/api/report":
