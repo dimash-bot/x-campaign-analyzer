@@ -119,13 +119,16 @@ def init_db():
             svix_id TEXT PRIMARY KEY, type TEXT, email_id TEXT, recipient TEXT, subject TEXT, link TEXT, at TEXT)""")
         c.execute("CREATE INDEX IF NOT EXISTS email_events_email ON email_events(email_id)")
         c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")   # small persistent flags
-        add_col("emails", "broadcast_id", "TEXT")    # from webhook events (API-synced emails are matched by subject + time)
+        add_col("emails", "broadcast_id", "TEXT")
+        for col_ in ("utm_medium", "utm_campaign", "utm_content"):   # users.ref holds utm_source
+            add_col("users", col_, "TEXT")    # from webhook events (API-synced emails are matched by subject + time)
         # Gmail Postmaster Tools, one row per sending domain per day (Gmail's own numbers)
         c.execute("""CREATE TABLE IF NOT EXISTS gmail_stats (
             domain TEXT NOT NULL, day TEXT NOT NULL, spam REAL, spam_lo REAL, spam_hi REAL, domain_rep TEXT, ip_rep TEXT,
             spf REAL, dkim REAL, dmarc REAL, errors TEXT, PRIMARY KEY (domain, day))""")
         c.execute("""CREATE TABLE IF NOT EXISTS broadcasts (
             id TEXT PRIMARY KEY, name TEXT, subject TEXT, sender TEXT, status TEXT, created_at TEXT, sent_at TEXT, synced_at TEXT)""")
+        add_col("broadcasts", "utm_campaign", "TEXT")   # set by hand when the links use a campaign name other than the broadcast's
         add_col("plans", "campaign_id", "INTEGER")   # set once the plan was sent to Waves
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
@@ -1544,11 +1547,32 @@ def map_broadcasts(c, emails):
     return bcs, out
 
 
+# A signup came from email when its UTM says so (links in our emails carry utm tags)
+EMAIL_UTM_MEDIUMS = {m.strip().lower() for m in os.environ.get("EMAIL_UTM_MEDIUMS", "email,e-mail,newsletter").split(",") if m.strip()}
+EMAIL_UTM_SOURCES = {m.strip().lower() for m in os.environ.get("EMAIL_UTM_SOURCES", "email,resend,newsletter,broadcast").split(",") if m.strip()}
+
+
+def slug(v):
+    return re.sub(r"[^a-z0-9]+", "-", (v or "").lower()).strip("-")
+
+
+def is_email_utm(u):
+    return (u["utm_medium"] or "").strip().lower() in EMAIL_UTM_MEDIUMS or (u["ref"] or "").strip().lower() in EMAIL_UTM_SOURCES
+
+
+def set_broadcast_utm(broadcast_id, campaign):
+    with _db_lock, db() as c:
+        if not c.execute("SELECT 1 FROM broadcasts WHERE id=?", (broadcast_id,)).fetchone():
+            raise ValueError("unknown broadcast")
+        c.execute("UPDATE broadcasts SET utm_campaign=? WHERE id=?", ((campaign or "").strip() or None, broadcast_id))
+    return {"id": broadcast_id, "utm_campaign": (campaign or "").strip() or None}
+
+
 def email_view(days=None, sender=None, include_system=False, broadcast=None):
     """Broadcast-first email analytics. With `broadcast` (id or 'latest'): only that broadcast's emails.
     Otherwise all emails in the period (sign-in codes / receipts hidden unless include_system).
-    Recipients are matched to our signups: 'signed up' = became a user after the email, 'API users' = of those,
-    made at least one API request."""
+    Signups are judged ONLY by UTM: a user whose utm_medium / utm_source marks email, matched to a broadcast by
+    utm_campaign (the broadcast's own campaign value, else its name or subject). API users = of those, made a request."""
     dv = lambda a, b: round(a * 100 / b, 1) if b else None  # noqa: E731
     since = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat() if days else ""
     with db() as c:
@@ -1559,7 +1583,8 @@ def email_view(days=None, sender=None, include_system=False, broadcast=None):
         for r in c.execute("SELECT email_id, type FROM email_events"):
             ev.setdefault(r[0], set()).add(r[1])
         clicks = [tuple(r) for r in c.execute("SELECT email_id, link, recipient FROM email_events WHERE type='clicked' AND link IS NOT NULL")]
-        users = {r[0]: (r[1], r[2]) for r in c.execute("SELECT email, signed_up, requests_all FROM users")}
+        email_users = [dict(r) for r in c.execute(
+            "SELECT email, signed_up, requests_all, ref, utm_medium, utm_campaign, utm_content FROM users") if is_email_utm(r)]
         n_events = c.execute("SELECT count(*) FROM email_events").fetchone()[0]
         last_hook = c.execute("SELECT max(at) FROM email_events").fetchone()[0]
 
@@ -1572,24 +1597,14 @@ def email_view(days=None, sender=None, include_system=False, broadcast=None):
              "bounced": int("bounced" in s or le == "bounced"),
              "complained": int("complained" in s or le == "complained"),
              "failed": int(bool(s & {"failed", "suppressed"}) or le in ("failed", "suppressed"))}
-        u = users.get(e["recipient"] or "")
-        f["signed_up"] = int(bool(u and e["created_at"] and u[0] >= e["created_at"]))
-        f["api_user"] = int(bool(f["signed_up"] and (u[1] or 0) > 0))
-        f["existing_user"] = int(bool(u and not f["signed_up"]))
         return f
 
-    def summary(rows):
-        t = collections.Counter(dict.fromkeys(("sent", "delivered", "opened", "clicked", "bounced", "complained", "failed",
-                                               "signed_up", "api_user", "existing_user"), 0))
-        signed, api = set(), set()
+    def summary(rows, signups=()):
+        t = collections.Counter(dict.fromkeys(("sent", "delivered", "opened", "clicked", "bounced", "complained", "failed"), 0))
         for e in rows:
-            f = flags(e)
-            t.update(f)
-            if f["signed_up"]:
-                signed.add(e["recipient"])
-            if f["api_user"]:
-                api.add(e["recipient"])
-        t["signups"], t["signup_api"] = len(signed), len(api)
+            t.update(flags(e))
+        t["signups"] = len(signups)
+        t["signup_api"] = sum(1 for u in signups if (u["requests_all"] or 0) > 0)
         t["recipients"] = len({e["recipient"] for e in rows if e["recipient"]})
         return {**t, "delivery_rate": dv(t["delivered"], t["sent"]), "open_rate": dv(t["opened"], t["delivered"]),
                 "click_rate": dv(t["clicked"], t["delivered"]), "ctor": dv(t["clicked"], t["opened"]),
@@ -1601,14 +1616,33 @@ def email_view(days=None, sender=None, include_system=False, broadcast=None):
         if e["id"] in bmap:
             per_bc[bmap[e["id"]]].append(e)
     domains = collections.Counter(sender_domain(e["sender"]) for e in everything if not SYSTEM_EMAIL_RE.search(e["subject"] or ""))
+    by_campaign = collections.defaultdict(list)
+    for u in email_users:
+        by_campaign[slug(u["utm_campaign"])].append(u)
+
+    def bc_keys(b):
+        return {slug(b.get("utm_campaign"))} if b.get("utm_campaign") else {slug(b["name"]), slug(b["subject"])} - {""}
+
+    def bc_signups(b):
+        return [u for k in bc_keys(b) for u in by_campaign.get(k, [])]
+
     broadcasts = [{"id": b["id"], "name": b["name"], "subject": b["subject"], "sender": b["sender"], "sent_at": b["sent_at"],
-                   "domain": sender_domain(b["sender"]), **summary(per_bc.get(b["id"], []))}
+                   "domain": sender_domain(b["sender"]), "utm_campaign": b.get("utm_campaign"), "utm_default": slug(b["name"]),
+                   **summary(per_bc.get(b["id"], []), bc_signups(b))}
                   for b in reversed(bcs) if sender_match(b["sender"], sender)]          # newest first
+    matched = {k: b["name"] for b in bcs for k in bc_keys(b)}
+    utm_campaigns = sorted(({"campaign": v[0]["utm_campaign"] or "(no campaign)", "signups": len(v),
+                             "api": sum(1 for u in v if (u["requests_all"] or 0) > 0), "broadcast": matched.get(k),
+                             "first": min(u["signed_up"] for u in v), "last": max(u["signed_up"] for u in v)}
+                            for k, v in by_campaign.items()), key=lambda r: -r["signups"])
     if broadcast == "latest":
         broadcast = next((b["id"] for b in broadcasts if b["sent"]), None)
     if broadcast:
         emails = per_bc.get(broadcast, [])
+        chosen = next((b for b in bcs if b["id"] == broadcast), None)
+        signups = bc_signups(chosen) if chosen else []
     else:
+        signups = [u for u in email_users if (u["signed_up"] or "") >= since]
         emails = [e for e in everything if (e["created_at"] or "") >= since
                   and sender_match(e["sender"], sender)
                   and (include_system or not SYSTEM_EMAIL_RE.search(e["subject"] or ""))]
@@ -1624,9 +1658,10 @@ def email_view(days=None, sender=None, include_system=False, broadcast=None):
     for e in emails:
         by_subject[(e["subject"] or "(no subject)").strip()].append(e)
         by_day[(e["created_at"] or "")[:10]].append(e)
-    campaigns = sorted(({"subject": k, "first": v[0]["created_at"], "last": v[-1]["created_at"], **summary(v)}
+    campaigns = sorted(({"subject": k, "first": v[0]["created_at"], "last": v[-1]["created_at"], **summary(v, by_campaign.get(slug(k), []))}
                         for k, v in by_subject.items()), key=lambda r: r["last"] or "", reverse=True)
-    return {"totals": summary(emails), "broadcast": broadcast, "broadcasts": broadcasts, "campaigns": campaigns,
+    return {"totals": summary(emails, signups), "broadcast": broadcast, "broadcasts": broadcasts, "campaigns": campaigns,
+            "utm_campaigns": utm_campaigns, "utm_rule": {"mediums": sorted(EMAIL_UTM_MEDIUMS), "sources": sorted(EMAIL_UTM_SOURCES)},
             "gmail": gmail_view(sender if sender else (next((b["sender"] for b in broadcasts if b["id"] == broadcast), None))),
             "domains": [{"domain": k, "emails": v} for k, v in domains.most_common()], "system_hidden": 0 if include_system or broadcast
             else sum(1 for e in everything if (e["created_at"] or "") >= since and sender_match(e["sender"], sender)
@@ -1724,6 +1759,8 @@ def import_users(csv_text, tz_name="America/Los_Angeles", replace=False):
     # "Requests" is the last-7-days count when an all-time column exists next to it
     c_req7 = col("requests_7d") or (cols.get("requests") if c_req != cols.get("requests") else None)
     c_credit, c_method, c_ref = col("credit"), col("sign_in_method", "sign_in"), col("ref", "referral", "utm_source", "referrer")
+    c_um, c_uc, c_uct = col("utm_medium"), col("utm_campaign"), col("utm_content")
+    cell = lambda r, k: ((r.get(k) or "").strip() or None) if k else None  # noqa: E731
     ok, bad, seen, removed = 0, 0, set(), 0
     with _db_lock, db() as c:
         for r in rows:
@@ -1732,16 +1769,20 @@ def import_users(csv_text, tz_name="America/Los_Angeles", replace=False):
                 bad += 1
                 continue
             seen.add(email)
-            c.execute("""INSERT INTO users(email, signed_up, keys, requests_all, requests_7d, credit, unconfirmed, ref, imported_at)
-                         VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET signed_up=excluded.signed_up,
+            c.execute("""INSERT INTO users(email, signed_up, keys, requests_all, requests_7d, credit, unconfirmed, ref, imported_at,
+                                utm_medium, utm_campaign, utm_content)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET signed_up=excluded.signed_up,
                          keys=excluded.keys, requests_all=excluded.requests_all, requests_7d=excluded.requests_7d,
                          credit=excluded.credit, unconfirmed=excluded.unconfirmed, ref=COALESCE(excluded.ref, users.ref),
+                         utm_medium=COALESCE(excluded.utm_medium, users.utm_medium),
+                         utm_campaign=COALESCE(excluded.utm_campaign, users.utm_campaign),
+                         utm_content=COALESCE(excluded.utm_content, users.utm_content),
                          imported_at=excluded.imported_at""",
                       (email, t.isoformat(), int(_num(r.get(c_keys))) if c_keys else 0,
                        _num(r.get(c_req)) if c_req else 0, _num(r.get(c_req7)) if c_req7 else 0,
                        r.get(c_credit) if c_credit else None,
                        int("unconfirmed" in (r.get(c_method) or "").lower()) if c_method else 0,
-                       (r.get(c_ref) or None) if c_ref else None, now()))
+                       (r.get(c_ref) or None) if c_ref else None, now(), cell(r, c_um), cell(r, c_uc), cell(r, c_uct)))
             ok += 1
         if replace:
             # Safety: never wipe the table because of a file we couldn't read properly
@@ -2205,6 +2246,12 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return
         path = u.path
+        if path == "/api/email/broadcast_utm":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, set_broadcast_utm(b["id"], b.get("utm_campaign")))
+            except (KeyError, ValueError) as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/postmaster/sync":
             threading.Thread(target=sync_postmaster, daemon=True).start()
             return self._send(200, {"started": True})

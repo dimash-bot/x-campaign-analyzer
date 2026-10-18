@@ -85,6 +85,8 @@ td.link a { color: var(--accent); text-decoration: none; }
 .copy { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
 .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
 .err { color: var(--bad); font-size: 12.5px; }
+input.utmin { width: 130px; font-size: 12px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+#utmRule code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; font-size: 12px; }
 .kpi .v.warn { color: var(--warn); }
 .kpi .l .i, th .i { display: inline-block; width: 14px; height: 14px; line-height: 14px; text-align: center; border-radius: 50%;
   font-size: 10px; font-weight: 700; color: var(--muted); border: 1px solid var(--border); margin-left: 4px; cursor: help; vertical-align: 1px; }
@@ -159,12 +161,22 @@ a.btnlink { display: inline-block; text-decoration: none; }
       <table id="bcs">
         <thead><tr>
           <th class="l">Broadcast</th><th class="l">Sent</th><th>Emails</th><th data-m="delivered">Delivered</th><th data-m="open">Open rate</th><th data-m="ctr">CTR</th><th data-m="ctor">CTOR</th>
-          <th data-m="bounced">Bounced</th><th data-m="spam">Spam</th><th data-m="signups">Signed up</th><th data-m="api">API users</th>
+          <th data-m="bounced">Bounced</th><th data-m="spam">Spam</th><th data-m="signups">Signups (UTM)</th><th data-m="api">API users</th>
+          <th class="l" title="utm_campaign value used in this broadcast's links. Empty = the broadcast name.">UTM campaign</th>
         </tr></thead>
         <tbody id="bcRows"></tbody>
       </table>
     </div>
     <p class="note" id="bcNote"></p>
+  </section>
+
+  <section class="card">
+    <h2>Email signups by UTM campaign</h2>
+    <p class="sub" id="utmRule"></p>
+    <div class="table-wrap">
+      <table id="utmT"><thead><tr><th class="l">utm_campaign</th><th>Signups</th><th>API users</th><th class="l">Broadcast</th><th class="l">First</th><th class="l">Latest</th></tr></thead>
+        <tbody id="utmRows"></tbody></table>
+    </div>
   </section>
 
   <section class="card" id="subjCard">
@@ -283,8 +295,8 @@ const META = {
   ctor: ["CTOR", "clicked ÷ opened", "Click-to-open rate: of the people who opened it, how many clicked. Measures the content and the call to action, not the subject line.", "Typical: 10–20%."],
   bounced: ["Bounced", "bounced ÷ sent", "Rejected because the address doesn't exist or the server refused it. High bounces damage the sending domain's reputation — clean the list.", "Keep under 2%; above 4% is a problem."],
   spam: ["Spam rate", "complaints ÷ delivered", "Recipients who clicked “Report spam”, as reported by Yahoo, Outlook/Hotmail, AOL and others. Gmail doesn't report single complaints — see where to get Gmail's spam rate below.", "Gmail / Yahoo rule: under 0.1%, never 0.3% or more."],
-  signups: ["Signed up after", "new signups ÷ people emailed", "Recipients who weren't users yet and created a Drex account (same email address) after this email. Signups with a different email aren't counted, and it isn't proof the email caused it.", ""],
-  api: ["…became API users", "of those signups", "Of the people who signed up after the email, how many made at least one API request.", ""],
+  signups: ["Signups (UTM)", "signups with this email's UTM", "Accounts created through a link in the email: the signup carries utm_medium=email (or utm_source email / resend / newsletter) and a utm_campaign matching this broadcast. Counted from the users export, so it updates when a new export is uploaded.", "Only links with UTM tags count — tag every link."],
+  api: ["…became API users", "of those signups", "Of the UTM signups from email, how many made at least one API request.", ""],
 };
 const tip = (key) => { const m = META[key]; return m ? `${m[0]} = ${m[1]}\n${m[2]}${m[3] ? "\n" + m[3] : ""}` : ""; };
 const fmtDay = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
@@ -315,8 +327,16 @@ function render() {
       <td>${int(b.sent)}</td><td>${pct(b.delivery_rate)}</td><td>${pct(b.open_rate)}</td><td class="${b.click_rate === bestCtr ? "good" : ""}">${pct(b.click_rate)}</td><td>${pct(b.ctor)}</td>
       <td class="${b.bounce_rate > 4 ? "bad" : ""}">${pct(b.bounce_rate)}</td>
       <td class="${b.complaint_rate >= 0.3 ? "bad" : ""}" title="${b.complained ? b.complaint_rate.toFixed(2) + "% of delivered" : ""}">${b.complained ? int(b.complained) : "—"}</td>
-      <td>${b.signups ? int(b.signups) : "—"}</td><td>${b.signup_api ? int(b.signup_api) : "—"}</td></tr>`).join("")
-    : `<tr><td colspan="11" class="empty">${D.setup.api ? "No broadcasts yet — they appear after the next sync." : "Connect Resend above."}</td></tr>`;
+      <td>${b.signups ? int(b.signups) : "—"}</td><td>${b.signup_api ? int(b.signup_api) : "—"}</td>
+      <td class="l"><input class="utmin" data-utm="${esc(b.id)}" value="${esc(b.utm_campaign || "")}" placeholder="${esc(b.utm_default)}" title="utm_campaign in this broadcast's links — leave empty if it's the broadcast name"></td></tr>`).join("")
+    : `<tr><td colspan="12" class="empty">${D.setup.api ? "No broadcasts yet — they appear after the next sync." : "Connect Resend above."}</td></tr>`;
+  $("utmRule").innerHTML = `A signup counts as from email when its <code>utm_medium</code> is ${D.utm_rule.mediums.map((m) => `<code>${esc(m)}</code>`).join(" / ")}
+    or its <code>utm_source</code> is ${D.utm_rule.sources.map((m) => `<code>${esc(m)}</code>`).join(" / ")}. It's matched to a broadcast by <code>utm_campaign</code>
+    (the broadcast name, or the value typed in the Broadcasts table). Updates when a new users export is uploaded.`;
+  $("utmRows").innerHTML = D.utm_campaigns.length ? D.utm_campaigns.map((u) => `<tr><td class="l"><b>${esc(u.campaign)}</b></td><td>${int(u.signups)}</td><td>${int(u.api)}</td>
+      <td class="l">${u.broadcast ? esc(u.broadcast) : `<span style="color:var(--warn)">not matched — type it in a broadcast's UTM campaign</span>`}</td>
+      <td class="l">${fmtDay(u.first)}</td><td class="l">${fmtDay(u.last)}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">No signups with an email UTM yet in the uploaded users export.</td></tr>`;
   const T = D.totals;
   const k = (key, v, s = "", cls = "", vcls = "") => `<div class="kpi ${cls}" title="${esc(tip(key))}"><div class="l">${META[key][0]}<span class="i">i</span></div><div class="v ${vcls}">${v}</div><div class="s">${s}</div></div>`;
   const spamCls = T.complaint_rate >= 0.3 ? "bad" : T.complaint_rate >= 0.1 ? "warn" : "";
@@ -329,7 +349,7 @@ function render() {
     k("bounced", pct(T.bounce_rate), `${int(T.bounced)} emails`, "", T.bounce_rate > 4 ? "bad" : T.bounce_rate > 2 ? "warn" : ""),
     k("spam", ok(T.complaint_rate) ? T.complaint_rate.toFixed(2) + "%" : "—", `${int(T.complained)} complaint${T.complained === 1 ? "" : "s"} · `
       + (D.gmail?.domains?.length === 1 && ok(D.gmail.domains[0].latest?.spam) ? `Gmail ${(D.gmail.domains[0].latest.spam * 100).toFixed(2)}% (below)` : "Gmail: see below"), "", spamCls),
-    k("signups", int(T.signups), `${pct(T.signup_rate)} of people emailed`, "hl"),
+    k("signups", int(T.signups), T.signups ? `${pct(T.signup_rate)} of people emailed` : "from UTM-tagged links", "hl"),
     k("api", int(T.signup_api), T.signups ? `${pct(T.signup_api * 100 / T.signups)} of those signups` : ""),
   ].join("");
   $("asof").textContent = B
@@ -458,7 +478,13 @@ window.addEventListener("xca-theme", () => { if (chart) { chart.destroy(); chart
 $("domSel").addEventListener("change", () => { domain = $("domSel").value; pref.set("xca_email_domain", domain); bc = "latest"; pref.set("xca_email_bc", bc); load(); });
 $("bcSel").addEventListener("change", () => { bc = $("bcSel").value; pref.set("xca_email_bc", bc); load(); });
 $("sysChk").addEventListener("change", () => { sys = $("sysChk").checked; load(); });
+$("bcRows").addEventListener("change", async (e) => {
+  const el = e.target.closest("input[data-utm]"); if (!el) return;
+  try { await api("/api/email/broadcast_utm", { id: el.dataset.utm, utm_campaign: el.value }); el.blur(); load(); }
+  catch (err) { el.style.borderColor = "var(--bad)"; el.title = "Couldn't save: " + err.message; }
+});
 $("bcRows").addEventListener("click", (e) => {
+  if (e.target.closest("input")) return;
   const tr = e.target.closest("tr[data-bc]"); if (!tr) return;
   bc = tr.dataset.bc; pref.set("xca_email_bc", bc); load(); window.scrollTo({ top: 0, behavior: "smooth" });
 });
