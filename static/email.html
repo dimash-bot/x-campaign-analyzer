@@ -85,6 +85,18 @@ td.link a { color: var(--accent); text-decoration: none; }
 .copy { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
 .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
 .err { color: var(--bad); font-size: 12.5px; }
+.kpi .v.warn { color: var(--warn); }
+.kpi .l .i, th .i { display: inline-block; width: 14px; height: 14px; line-height: 14px; text-align: center; border-radius: 50%;
+  font-size: 10px; font-weight: 700; color: var(--muted); border: 1px solid var(--border); margin-left: 4px; cursor: help; vertical-align: 1px; }
+.kpi[title], th[title] { cursor: help; }
+.gloss { width: 100%; border-collapse: collapse; }
+.gloss td { text-align: left; white-space: normal; vertical-align: top; padding: 9px 10px; font-size: 13px; }
+.gloss td:first-child { font-weight: 650; white-space: nowrap; width: 150px; }
+.gloss td.f { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: nowrap; }
+.gloss td.g { color: var(--muted); font-size: 12.5px; }
+.spamsrc h3 { font-size: 14px; margin: 14px 0 4px; }
+.spamsrc p, .spamsrc li { font-size: 13px; margin: 4px 0; }
+.spamsrc ol { padding-left: 20px; margin: 4px 0; }
 .pickers { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 14px; }
 .pickers label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
 .pickers select { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; min-width: 200px; max-width: 460px; color: var(--text); }
@@ -133,8 +145,8 @@ td.link a { color: var(--accent); text-decoration: none; }
     <div class="table-wrap">
       <table id="bcs">
         <thead><tr>
-          <th class="l">Broadcast</th><th class="l">Sent</th><th>Emails</th><th>Delivered</th><th>Open rate</th><th title="Click-through rate: clicks ÷ delivered">CTR</th><th title="Click-to-open: clicks ÷ opens">CTOR</th>
-          <th>Bounced</th><th>Spam</th><th>Signed up</th><th>API users</th>
+          <th class="l">Broadcast</th><th class="l">Sent</th><th>Emails</th><th data-m="delivered">Delivered</th><th data-m="open">Open rate</th><th data-m="ctr">CTR</th><th data-m="ctor">CTOR</th>
+          <th data-m="bounced">Bounced</th><th data-m="spam">Spam</th><th data-m="signups">Signed up</th><th data-m="api">API users</th>
         </tr></thead>
         <tbody id="bcRows"></tbody>
       </table>
@@ -148,8 +160,8 @@ td.link a { color: var(--accent); text-decoration: none; }
     <div class="table-wrap">
       <table id="camps">
         <thead><tr>
-          <th class="l">Subject</th><th>Sent</th><th>Delivered</th><th>Open rate</th><th title="Click-through rate: clicks ÷ delivered">CTR</th><th title="Click-to-open: clicks ÷ opens">CTOR</th>
-          <th>Bounced</th><th>Spam</th><th>Signed up</th><th>API users</th><th class="l">Last sent</th>
+          <th class="l">Subject</th><th>Sent</th><th data-m="delivered">Delivered</th><th data-m="open">Open rate</th><th data-m="ctr">CTR</th><th data-m="ctor">CTOR</th>
+          <th data-m="bounced">Bounced</th><th data-m="spam">Spam</th><th data-m="signups">Signed up</th><th data-m="api">API users</th><th class="l">Last sent</th>
         </tr></thead>
         <tbody id="campRows"></tbody>
       </table>
@@ -162,7 +174,30 @@ td.link a { color: var(--accent); text-decoration: none; }
     <div class="table-wrap">
       <table id="links"><thead><tr><th class="l">Link</th><th>Clicks</th><th>People</th></tr></thead><tbody id="linkRows"></tbody></table>
     </div>
-    <p class="note">Open rates are inflated by Apple Mail privacy (it pre-loads every email), so click rate and signups are the numbers to trust.</p>
+  </section>
+
+  <section class="card">
+    <details id="glossWrap">
+      <summary style="cursor:pointer"><h2 style="display:inline">What the metrics mean</h2> <span class="sub">— formula, meaning and what “good” looks like</span></summary>
+      <div class="table-wrap" style="margin-top:10px"><table class="gloss"><tbody id="gloss"></tbody></table></div>
+      <div class="spamsrc">
+        <h3>Where the spam rate comes from — and how to get Gmail's</h3>
+        <p><b>On this page:</b> Resend's <code>email.complained</code> events. They exist when a mailbox provider runs a
+          “feedback loop”: Yahoo, AOL, Outlook / Hotmail and some others tell the sender each time someone clicks “Report spam”.
+          These come in through the API sync and, faster, through the webhook.</p>
+        <p><b>Gmail never reports single complaints</b>, and most of your recipients are on Gmail, so the number here undercounts. Gmail's spam rate lives in
+          <b>Google Postmaster Tools</b> — the same number Google uses to decide inbox vs. spam:</p>
+        <ol>
+          <li>Open <b>postmaster.google.com</b> with a Google account → <b>Add domain</b> → enter the sending domain (e.g. drex-usa.com, nace.ai).</li>
+          <li>Google gives a TXT record; add it in the domain's DNS and click <b>Verify</b>.</li>
+          <li>Data appears after ~a day, and only on days you send roughly 100+ emails to Gmail addresses. Look at <b>Spam rate</b>
+            (keep under 0.1%, never 0.3%+), plus <b>Domain reputation</b> and <b>Authentication</b> (SPF / DKIM / DMARC).</li>
+        </ol>
+        <p><b>Microsoft (Outlook / Hotmail):</b> sign up for <b>SNDS</b> (sendersupport.olc.protection.outlook.com/snds) to see complaint rates per sending IP —
+          with Resend you share IPs unless you have a dedicated one, so this matters less.</p>
+        <p>Postmaster Tools also has an API, so once a domain is verified this page could pull Gmail's daily spam rate automatically.</p>
+      </div>
+    </details>
   </section>
 </div>
 
@@ -226,6 +261,19 @@ async function syncNow() {
   setTimeout(load, 4000);
 }
 
+// What every metric means (tile tooltips, table headers, and the glossary at the bottom)
+const META = {
+  sent: ["Emails sent", "sent", "Emails Resend accepted and sent out — one per recipient.", ""],
+  delivered: ["Delivered", "delivered ÷ sent", "Share accepted by the recipient's mail server. Delivered ≠ inbox: it can still land in spam.", "Healthy: above 97%."],
+  open: ["Open rate", "opened ÷ delivered", "Share that opened it (a hidden tracking image loaded). Apple Mail pre-loads every email and Gmail caches images, so this runs high — use it to compare emails, not as truth.", "Typical: 20–45%."],
+  ctr: ["CTR", "clicked ÷ delivered", "Click-through rate: share of delivered emails where someone clicked at least one link. The most reliable engagement number.", "Typical for SaaS / dev tools: 1–5%."],
+  ctor: ["CTOR", "clicked ÷ opened", "Click-to-open rate: of the people who opened it, how many clicked. Measures the content and the call to action, not the subject line.", "Typical: 10–20%."],
+  bounced: ["Bounced", "bounced ÷ sent", "Rejected because the address doesn't exist or the server refused it. High bounces damage the sending domain's reputation — clean the list.", "Keep under 2%; above 4% is a problem."],
+  spam: ["Spam rate", "complaints ÷ delivered", "Recipients who clicked “Report spam”, as reported by Yahoo, Outlook/Hotmail, AOL and others. Gmail doesn't report single complaints — see where to get Gmail's spam rate below.", "Gmail / Yahoo rule: under 0.1%, never 0.3% or more."],
+  signups: ["Signed up after", "new signups ÷ people emailed", "Recipients who weren't users yet and created a Drex account (same email address) after this email. Signups with a different email aren't counted, and it isn't proof the email caused it.", ""],
+  api: ["…became API users", "of those signups", "Of the people who signed up after the email, how many made at least one API request.", ""],
+};
+const tip = (key) => { const m = META[key]; return m ? `${m[0]} = ${m[1]}\n${m[2]}${m[3] ? "\n" + m[3] : ""}` : ""; };
 const fmtDay = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
 function renderPickers() {
   const doms = D.domains || [];
@@ -252,21 +300,22 @@ function render() {
       <td class="l">${b.sent_at ? fmtDay(b.sent_at) : "<span style='color:var(--muted)'>not sent</span>"}</td>
       <td>${int(b.sent)}</td><td>${pct(b.delivery_rate)}</td><td>${pct(b.open_rate)}</td><td class="${b.click_rate === bestCtr ? "good" : ""}">${pct(b.click_rate)}</td><td>${pct(b.ctor)}</td>
       <td class="${b.bounce_rate > 4 ? "bad" : ""}">${pct(b.bounce_rate)}</td>
-      <td class="${b.complaint_rate > 0.1 ? "bad" : ""}">${b.complained ? int(b.complained) : "—"}</td>
+      <td class="${b.complaint_rate >= 0.3 ? "bad" : ""}" title="${b.complained ? b.complaint_rate.toFixed(2) + "% of delivered" : ""}">${b.complained ? int(b.complained) : "—"}</td>
       <td>${b.signups ? int(b.signups) : "—"}</td><td>${b.signup_api ? int(b.signup_api) : "—"}</td></tr>`).join("")
     : `<tr><td colspan="11" class="empty">${D.setup.api ? "No broadcasts yet — they appear after the next sync." : "Connect Resend above."}</td></tr>`;
   const T = D.totals;
-  const k = (l, v, s = "", cls = "", vcls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v ${vcls}">${v}</div><div class="s">${s}</div></div>`;
+  const k = (key, v, s = "", cls = "", vcls = "") => `<div class="kpi ${cls}" title="${esc(tip(key))}"><div class="l">${META[key][0]}<span class="i">i</span></div><div class="v ${vcls}">${v}</div><div class="s">${s}</div></div>`;
+  const spamCls = T.complaint_rate >= 0.3 ? "bad" : T.complaint_rate >= 0.1 ? "warn" : "";
   $("kpis").innerHTML = [
-    k("Emails sent", int(T.sent), `${int(T.recipients)} people`),
-    k("Delivered", pct(T.delivery_rate), `${int(T.delivered)} emails`),
-    k("Open rate", pct(T.open_rate), `${int(T.opened)} opened`),
-    k("CTR", pct(T.click_rate), `${int(T.clicked)} clicked ÷ ${int(T.delivered)} delivered`, "hl"),
-    k("CTOR", pct(T.ctor), "click-to-open: clicks ÷ opens"),
-    k("Bounced", pct(T.bounce_rate), `${int(T.bounced)} emails`, "", T.bounce_rate > 4 ? "bad" : ""),
-    k("Spam complaints", pct(T.complaint_rate), `${int(T.complained)} people`, "", T.complaint_rate > 0.1 ? "bad" : ""),
-    k("Signed up after", int(T.signups), `${pct(T.signup_rate)} of people emailed`, "hl"),
-    k("…became API users", int(T.signup_api), T.signups ? `${pct(T.signup_api * 100 / T.signups)} of those signups` : ""),
+    k("sent", int(T.sent), `${int(T.recipients)} people`),
+    k("delivered", pct(T.delivery_rate), `${int(T.delivered)} emails`, "", T.delivery_rate < 95 ? "warn" : ""),
+    k("open", pct(T.open_rate), `${int(T.opened)} opened`),
+    k("ctr", pct(T.click_rate), `${int(T.clicked)} clicked ÷ ${int(T.delivered)} delivered`, "hl"),
+    k("ctor", pct(T.ctor), `${int(T.clicked)} clicked ÷ ${int(T.opened)} opened`),
+    k("bounced", pct(T.bounce_rate), `${int(T.bounced)} emails`, "", T.bounce_rate > 4 ? "bad" : T.bounce_rate > 2 ? "warn" : ""),
+    k("spam", ok(T.complaint_rate) ? T.complaint_rate.toFixed(2) + "%" : "—", `${int(T.complained)} complaint${T.complained === 1 ? "" : "s"} · Gmail not included`, "", spamCls),
+    k("signups", int(T.signups), `${pct(T.signup_rate)} of people emailed`, "hl"),
+    k("api", int(T.signup_api), T.signups ? `${pct(T.signup_api * 100 / T.signups)} of those signups` : ""),
   ].join("");
   $("asof").textContent = B
     ? `Sent ${fmtDay(B.sent_at)} from ${B.sender || B.domain} · subject “${B.subject || ""}” · ${int(T.recipients)} people`
@@ -291,6 +340,11 @@ function render() {
     : `<tr><td colspan="3" class="empty">No clicks recorded yet.</td></tr>`;
   drawChart();
 }
+function renderGlossary() {
+  $("gloss").innerHTML = Object.values(META).map((m) => `<tr><td>${m[0]}</td><td class="f">${esc(m[1])}</td><td>${esc(m[2])}</td><td class="g">${esc(m[3])}</td></tr>`).join("");
+  document.querySelectorAll("th[data-m]").forEach((th) => { th.title = tip(th.dataset.m); });
+}
+renderGlossary();
 function drawChart() {
   if (!window.Chart) return;
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;

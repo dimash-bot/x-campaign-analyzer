@@ -1489,7 +1489,7 @@ def email_view(days=None, sender=None, include_system=False, broadcast=None):
         t["recipients"] = len({e["recipient"] for e in rows if e["recipient"]})
         return {**t, "delivery_rate": dv(t["delivered"], t["sent"]), "open_rate": dv(t["opened"], t["delivered"]),
                 "click_rate": dv(t["clicked"], t["delivered"]), "ctor": dv(t["clicked"], t["opened"]),
-                "bounce_rate": dv(t["bounced"], t["sent"]), "complaint_rate": dv(t["complained"], t["delivered"]),
+                "bounce_rate": dv(t["bounced"], t["sent"]), "complaint_rate": round(t["complained"] * 100 / t["delivered"], 3) if t["delivered"] else None,
                 "signup_rate": dv(t["signups"], t["recipients"])}
 
     per_bc = collections.defaultdict(list)
