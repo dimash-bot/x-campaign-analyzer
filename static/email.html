@@ -94,6 +94,17 @@ td.link a { color: var(--accent); text-decoration: none; }
 .gloss td:first-child { font-weight: 650; white-space: nowrap; width: 150px; }
 .gloss td.f { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: nowrap; }
 .gloss td.g { color: var(--muted); font-size: 12.5px; }
+.gm-dom { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.gm-dom:first-of-type { border-top: none; padding-top: 0; }
+.gm-dom h3 { font-size: 14px; margin: 0 0 8px; }
+.gm-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.gm-row .kpi { padding: 10px 12px; } .gm-row .kpi .v { font-size: 19px; }
+.rep { display: inline-block; font-size: 13px; font-weight: 700; padding: 2px 10px; border-radius: 99px; background: var(--surface-2); }
+.rep.HIGH { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.rep.MEDIUM { color: var(--warn); background: var(--warn-bg); }
+.rep.LOW, .rep.BAD { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.gm-chart { position: relative; height: 170px; }
+a.btnlink { display: inline-block; text-decoration: none; }
 .spamsrc h3 { font-size: 14px; margin: 14px 0 4px; }
 .spamsrc p, .spamsrc li { font-size: 13px; margin: 4px 0; }
 .spamsrc ol { padding-left: 20px; margin: 4px 0; }
@@ -132,6 +143,8 @@ td.link a { color: var(--accent); text-decoration: none; }
   </div>
   <div class="bchead"><h2 id="title">Email analytics</h2><p class="sub" id="asof"></p></div>
   <section class="kpis" id="kpis"></section>
+
+  <section class="card" id="gmail"></section>
 
   <section class="card">
     <h2>Sends by day</h2>
@@ -313,7 +326,8 @@ function render() {
     k("ctr", pct(T.click_rate), `${int(T.clicked)} clicked ÷ ${int(T.delivered)} delivered`, "hl"),
     k("ctor", pct(T.ctor), `${int(T.clicked)} clicked ÷ ${int(T.opened)} opened`),
     k("bounced", pct(T.bounce_rate), `${int(T.bounced)} emails`, "", T.bounce_rate > 4 ? "bad" : T.bounce_rate > 2 ? "warn" : ""),
-    k("spam", ok(T.complaint_rate) ? T.complaint_rate.toFixed(2) + "%" : "—", `${int(T.complained)} complaint${T.complained === 1 ? "" : "s"} · Gmail not included`, "", spamCls),
+    k("spam", ok(T.complaint_rate) ? T.complaint_rate.toFixed(2) + "%" : "—", `${int(T.complained)} complaint${T.complained === 1 ? "" : "s"} · `
+      + (D.gmail?.domains?.length === 1 && ok(D.gmail.domains[0].latest?.spam) ? `Gmail ${(D.gmail.domains[0].latest.spam * 100).toFixed(2)}% (below)` : "Gmail: see below"), "", spamCls),
     k("signups", int(T.signups), `${pct(T.signup_rate)} of people emailed`, "hl"),
     k("api", int(T.signup_api), T.signups ? `${pct(T.signup_api * 100 / T.signups)} of those signups` : ""),
   ].join("");
@@ -340,6 +354,66 @@ function render() {
     : `<tr><td colspan="3" class="empty">No clicks recorded yet.</td></tr>`;
   drawChart();
 }
+// ---- Gmail spam rate from Google Postmaster Tools
+const gmCharts = [];
+function renderGmail(G) {
+  const el = $("gmail");
+  gmCharts.splice(0).forEach((c) => c.destroy());
+  const qs = new URLSearchParams(location.search);
+  const flash = qs.get("pm_error") ? `<div class="err">Couldn't connect: ${esc(qs.get("pm_error"))}</div>`
+    : qs.get("pm") === "connected" ? `<div class="sub" style="color:var(--good)">Connected — pulling Gmail's numbers now.</div>` : "";
+  if (!G.connected) {
+    el.innerHTML = `<h2>Gmail spam rate <span class="sub">— from Google Postmaster Tools</span></h2>
+      <p class="sub">The spam number Gmail itself uses to decide inbox vs. spam (Gmail never reports single complaints, so the tile above can't include Gmail).</p>
+      <ol class="steps">
+        <li>Verify each sending domain at <a href="https://postmaster.google.com" target="_blank" rel="noopener">postmaster.google.com</a> (TXT record in GoDaddy DNS). Use a <b>@nace.ai</b> Google account, or add one as a user on the domain there.</li>
+        <li>Turn on the API once in Google Cloud (same project as the app's Google sign-in):
+          <a href="https://console.cloud.google.com/apis/library/gmailpostmastertools.googleapis.com" target="_blank" rel="noopener">Gmail Postmaster Tools API → Enable</a>.</li>
+        <li>Click <b>Connect</b> and allow read-only access. Numbers then refresh every 6 hours.</li>
+      </ol>${flash}
+      <div class="row" style="margin-top:8px"><a class="btnlink" href="/auth/postmaster"><button class="primary">Connect Google Postmaster</button></a></div>`;
+    return;
+  }
+  const f = (x, d = 2) => ok(x) ? (x * 100).toFixed(d) + "%" : "—";
+  const spamCls = (x) => !ok(x) ? "" : x >= 0.003 ? "bad" : x >= 0.001 ? "warn" : "";
+  const head = `<div class="row" style="justify-content:space-between">
+      <div><h2 style="margin:0">Gmail spam rate <span class="sub">— Google Postmaster Tools</span></h2>
+        <p class="sub" style="margin:2px 0 0">Connected as ${esc(G.email || "?")} · updated ${when(G.last_sync)} · domains: ${esc(G.all_domains.join(", ") || "none yet")}</p></div>
+      <div class="row"><button id="pmSync">↻ Refresh</button><button id="pmOff" title="Remove the Google connection">Disconnect</button></div>
+    </div>${G.error ? `<div class="err">${esc(G.error)}</div>` : ""}${flash}`;
+  const body = G.domains.length ? G.domains.map((d, i) => {
+    const L = d.latest;
+    if (!L) return `<div class="gm-dom"><h3>${esc(d.domain)}</h3><p class="sub">No Gmail data yet. Postmaster shows numbers only for days with enough mail to Gmail addresses (roughly 100+), starting a day or two after the domain is verified.</p></div>`;
+    const auth = (x) => ok(x) ? (x * 100).toFixed(0) + "%" : "—";
+    return `<div class="gm-dom"><h3>${esc(d.domain)} <span class="sub">· latest day ${fmtDay(L.day)}</span></h3>
+      <div class="gm-row">
+        <div class="kpi" title="${esc(tip("spam"))}"><div class="l">Gmail spam rate</div><div class="v ${spamCls(L.spam)}">${f(L.spam)}</div>
+          <div class="s">${ok(L.spam_lo) ? `likely ${f(L.spam_lo)}–${f(L.spam_hi)}` : "keep under 0.10%"}</div></div>
+        <div class="kpi"><div class="l">7-day average</div><div class="v ${spamCls(d.spam_7d)}">${f(d.spam_7d)}</div><div class="s">limit 0.30%</div></div>
+        <div class="kpi" title="Google's view of the domain: HIGH = follows the rules, MEDIUM = some spam, LOW / BAD = mail goes to spam or gets rejected"><div class="l">Domain reputation</div>
+          <div class="v"><span class="rep ${esc(L.rep || "")}">${esc(L.rep || "no data")}</span></div><div class="s">HIGH › MEDIUM › LOW › BAD</div></div>
+        <div class="kpi" title="Share of your mail to Gmail that passed each authentication check. All three should be ~100%."><div class="l">SPF · DKIM · DMARC</div>
+          <div class="v" style="font-size:16px">${auth(L.spf)} · ${auth(L.dkim)} · ${auth(L.dmarc)}</div><div class="s">should all be ~100%</div></div>
+      </div>
+      <div class="gm-chart"><canvas id="gm${i}"></canvas></div></div>`;
+  }).join("") : `<p class="sub" style="margin-top:8px">${G.all_domains.length ? "No Postmaster domain matches the chosen sending domain." : "This Google account doesn't see any domains in Postmaster Tools yet — verify one there, or connect with the account that did."}</p>`;
+  el.innerHTML = head + body;
+  $("pmSync").onclick = async () => { $("pmSync").disabled = true; await api("/api/postmaster/sync", {}).catch(() => {}); setTimeout(load, 6000); };
+  $("pmOff").onclick = async () => { if (confirm("Disconnect Google Postmaster Tools?")) { await api("/api/postmaster/disconnect", {}); load(); } };
+  if (!window.Chart) return;
+  G.domains.forEach((d, i) => {
+    const cv = $("gm" + i); if (!cv || !d.days.length) return;
+    const lbl = d.days.map((x) => new Date(x.day + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }));
+    const line = (v, color) => ({ type: "line", data: d.days.map(() => v), borderColor: color, borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0, fill: false });
+    gmCharts.push(new Chart(cv, { data: { labels: lbl, datasets: [
+      { type: "line", label: "Gmail spam rate", data: d.days.map((x) => ok(x.spam) ? +(x.spam * 100).toFixed(3) : null), borderColor: "#2a78d6", backgroundColor: "#2a78d6", spanGaps: true, pointRadius: 2, borderWidth: 2 },
+      { ...line(0.1, "#c98a1b"), label: "0.10% target" }, { ...line(0.3, "#e34948"), label: "0.30% limit" },
+    ] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, boxHeight: 2 } },
+      tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y}%` } } },
+      scales: { x: { grid: { display: false } }, y: { beginAtZero: true, suggestedMax: 0.35, ticks: { callback: (v) => v + "%" } } } } }));
+  });
+}
+
 function renderGlossary() {
   $("gloss").innerHTML = Object.values(META).map((m) => `<tr><td>${m[0]}</td><td class="f">${esc(m[1])}</td><td>${esc(m[2])}</td><td class="g">${esc(m[3])}</td></tr>`).join("");
   document.querySelectorAll("th[data-m]").forEach((th) => { th.title = tip(th.dataset.m); });
@@ -381,7 +455,7 @@ async function load() {
   if (bc) q.set("broadcast", bc); else if (days) q.set("days", days);
   if (domain) q.set("sender", domain);
   if (sys) q.set("system", "1");
-  try { D = await api("/api/email?" + q); renderSetup(D.setup); render(); } catch (e) { /* keep last render */ }
+  try { D = await api("/api/email?" + q); renderSetup(D.setup); render(); renderGmail(D.gmail); } catch (e) { /* keep last render */ }
   timer = setTimeout(load, D?.setup?.syncing ? 4000 : 60000);
 }
 api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});

@@ -31,6 +31,7 @@ import auth
 import mcp_server
 import platforms
 import resend_client
+import postmaster
 from x_client import NeedsLogin, XClient, tweet_id_from
 import statistics
 
@@ -119,6 +120,10 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS email_events_email ON email_events(email_id)")
         c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")   # small persistent flags
         add_col("emails", "broadcast_id", "TEXT")    # from webhook events (API-synced emails are matched by subject + time)
+        # Gmail Postmaster Tools, one row per sending domain per day (Gmail's own numbers)
+        c.execute("""CREATE TABLE IF NOT EXISTS gmail_stats (
+            domain TEXT NOT NULL, day TEXT NOT NULL, spam REAL, spam_lo REAL, spam_hi REAL, domain_rep TEXT, ip_rep TEXT,
+            spf REAL, dkim REAL, dmarc REAL, errors TEXT, PRIMARY KEY (domain, day))""")
         c.execute("""CREATE TABLE IF NOT EXISTS broadcasts (
             id TEXT PRIMARY KEY, name TEXT, subject TEXT, sender TEXT, status TEXT, created_at TEXT, sent_at TEXT, synced_at TEXT)""")
         add_col("plans", "campaign_id", "INTEGER")   # set once the plan was sent to Waves
@@ -1332,6 +1337,85 @@ def sync_resend():
     return _resend
 
 
+# ---------------------------------------------------------------- Gmail Postmaster Tools
+
+def kv_get(c, k):
+    row = c.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
+    return row[0] if row else None
+
+
+def kv_set(c, k, v):
+    if v is None:
+        c.execute("DELETE FROM kv WHERE k=?", (k,))
+    else:
+        c.execute("INSERT OR REPLACE INTO kv(k, v) VALUES (?, ?)", (k, str(v)))
+
+
+_pm_lock = threading.Lock()
+
+
+def sync_postmaster():
+    """Pull the last 120 days of Gmail stats for every domain the connected account sees in Postmaster Tools."""
+    with db() as c:
+        refresh = kv_get(c, "pm_refresh")
+    if not refresh or not _pm_lock.acquire(blocking=False):
+        return
+    try:
+        token = postmaster.access_token(refresh)
+        doms = postmaster.domains(token)
+        rows = []
+        for d in doms:
+            for t in postmaster.traffic_stats(token, d):
+                day = t["name"].rsplit("/", 1)[-1]
+                day = f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+                ips = {r.get("reputation"): int(r.get("ipCount") or 0) for r in t.get("ipReputations", []) if int(r.get("ipCount") or 0)}
+                rows.append((d, day, t.get("userReportedSpamRatio"), t.get("userReportedSpamRatioLowerBound"),
+                             t.get("userReportedSpamRatioUpperBound"), t.get("domainReputation"), json.dumps(ips) if ips else None,
+                             t.get("spfSuccessRatio"), t.get("dkimSuccessRatio"), t.get("dmarcSuccessRatio"),
+                             json.dumps(t["deliveryErrors"]) if t.get("deliveryErrors") else None))
+        with _db_lock, db() as c:
+            c.executemany("""INSERT OR REPLACE INTO gmail_stats(domain, day, spam, spam_lo, spam_hi, domain_rep, ip_rep, spf, dkim, dmarc, errors)
+                             VALUES (?,?,?,?,?,?,?,?,?,?,?)""", rows)
+            kv_set(c, "pm_domains", json.dumps(doms))
+            kv_set(c, "pm_last_sync", now())
+            kv_set(c, "pm_error", None)
+    except Exception as ex:  # noqa: BLE001 — shown on the Email page
+        print(f"postmaster sync failed: {ex}", flush=True)
+        with _db_lock, db() as c:
+            kv_set(c, "pm_error", str(ex)[:300])
+            kv_set(c, "pm_last_sync", now())
+    finally:
+        _pm_lock.release()
+
+
+def postmaster_worker():
+    while True:
+        sync_postmaster()
+        time.sleep(6 * 3600)          # Gmail publishes these once a day
+
+
+def gmail_view(sender=None):
+    """Postmaster status + daily Gmail numbers per domain (only the chosen sending domain when one is picked)."""
+    want = sender_key(sender).rsplit("@", 1)[-1] if sender else ""
+    with db() as c:
+        st = {k: kv_get(c, k) for k in ("pm_refresh", "pm_email", "pm_connected_at", "pm_error", "pm_last_sync", "pm_domains")}
+        rows = [dict(r) for r in c.execute("SELECT * FROM gmail_stats WHERE day >= ? ORDER BY day",
+                                           ((datetime.now(timezone.utc) - timedelta(days=90)).date().isoformat(),))]
+    doms = json.loads(st["pm_domains"] or "[]")
+    out = []
+    for d in doms:
+        if want and not (want == d or want.endswith("." + d)):
+            continue
+        days = [{"day": r["day"], "spam": r["spam"], "spam_lo": r["spam_lo"], "spam_hi": r["spam_hi"], "rep": r["domain_rep"],
+                 "spf": r["spf"], "dkim": r["dkim"], "dmarc": r["dmarc"], "ips": json.loads(r["ip_rep"]) if r["ip_rep"] else None,
+                 "errors": json.loads(r["errors"]) if r["errors"] else None} for r in rows if r["domain"] == d]
+        last7 = [x["spam"] for x in days[-7:] if x["spam"] is not None]
+        out.append({"domain": d, "days": days, "latest": days[-1] if days else None,
+                    "spam_7d": round(sum(last7) / len(last7), 5) if last7 else None})
+    return {"connected": bool(st["pm_refresh"]), "email": st["pm_email"], "connected_at": st["pm_connected_at"],
+            "error": st["pm_error"], "last_sync": st["pm_last_sync"], "domains": out, "all_domains": doms}
+
+
 def sync_broadcasts():
     """Broadcast list + each one's subject / sender / send time (fetched once, again only while not yet sent)."""
     with db() as c:
@@ -1523,6 +1607,7 @@ def email_view(days=None, sender=None, include_system=False, broadcast=None):
     campaigns = sorted(({"subject": k, "first": v[0]["created_at"], "last": v[-1]["created_at"], **summary(v)}
                         for k, v in by_subject.items()), key=lambda r: r["last"] or "", reverse=True)
     return {"totals": summary(emails), "broadcast": broadcast, "broadcasts": broadcasts, "campaigns": campaigns,
+            "gmail": gmail_view(sender if sender else (next((b["sender"] for b in broadcasts if b["id"] == broadcast), None))),
             "domains": [{"domain": k, "emails": v} for k, v in domains.most_common()], "system_hidden": 0 if include_system or broadcast
             else sum(1 for e in everything if (e["created_at"] or "") >= since and sender_match(e["sender"], sender)
                      and SYSTEM_EMAIL_RE.search(e["subject"] or "")),
@@ -1931,6 +2016,24 @@ class Handler(BaseHTTPRequestHandler):
             if not st or st.get("s") != q.get("state", [""])[0] or "code" not in q:
                 self._redirect("/login?error=Sign-in+expired.+Please+try+again.")
                 return True
+            if st.get("pm"):   # "Connect Google Postmaster" from the Email page, not a sign-in
+                me = self._user()
+                try:
+                    if not me:
+                        raise PermissionError("Sign in first.")
+                    got = postmaster.exchange(q["code"][0], redirect_uri)
+                except PermissionError as e:
+                    self._redirect("/email?pm_error=" + quote(str(e)), [self._set_cookie("oauth_state", "", 0)])
+                    return True
+                with _db_lock, db() as c:
+                    kv_set(c, "pm_refresh", got["refresh_token"])
+                    kv_set(c, "pm_email", got["email"] or me["email"])
+                    kv_set(c, "pm_connected_at", now())
+                    kv_set(c, "pm_error", None)
+                print(f"postmaster connected by {me['email']} as {got['email']}", flush=True)
+                threading.Thread(target=sync_postmaster, daemon=True).start()
+                self._redirect("/email?pm=connected", [self._set_cookie("oauth_state", "", 0)])
+                return True
             try:
                 user = auth.exchange_code(q["code"][0], redirect_uri)
             except PermissionError as e:
@@ -1995,6 +2098,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, creators_view())
         if u.path == "/agencies":   # replaced by Email analytics
             return self._redirect("/email")
+        if u.path == "/auth/postmaster":
+            if not auth.ENABLED:
+                return self._send(400, "Google sign-in isn't configured on this server.", "text/plain; charset=utf-8")
+            state_ = auth.new_state()
+            return self._redirect(postmaster.connect_url(self._base_url() + "/auth/callback", state_),
+                                  [self._set_cookie("oauth_state", auth.sign({"s": state_, "pm": 1, "n": "/email", "exp": time.time() + 600}), 600)])
         if u.path == "/email":
             with open(os.path.join(HERE, "static", "email.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
@@ -2076,6 +2185,14 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return
         path = u.path
+        if path == "/api/postmaster/sync":
+            threading.Thread(target=sync_postmaster, daemon=True).start()
+            return self._send(200, {"started": True})
+        if path == "/api/postmaster/disconnect":
+            with _db_lock, db() as c:
+                for k in ("pm_refresh", "pm_email", "pm_connected_at", "pm_error"):
+                    kv_set(c, k, None)
+            return self._send(200, {"disconnected": True})
         if path == "/api/email/sync":
             if not resend_client.api_enabled():
                 return self._send(400, {"error": "RESEND_API_KEY is not set"})
@@ -2294,5 +2411,6 @@ if __name__ == "__main__":
     threading.Thread(target=backup_worker, daemon=True).start()
     threading.Thread(target=backfill_creators, daemon=True).start()
     threading.Thread(target=resend_worker, daemon=True).start()
+    threading.Thread(target=postmaster_worker, daemon=True).start()
     print(f"X campaign analyzer → http://{HOST}:{PORT}  (data: {DB_PATH}, login: {'Google @' + auth.ALLOWED_DOMAIN if auth.ENABLED else 'OFF'})", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
