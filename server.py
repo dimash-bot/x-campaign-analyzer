@@ -30,6 +30,7 @@ import apify_client
 import auth
 import mcp_server
 import platforms
+import resend_client
 from x_client import NeedsLogin, XClient, tweet_id_from
 import statistics
 
@@ -110,6 +111,12 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS plans (
             id INTEGER PRIMARY KEY, name TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', notes TEXT,
             created_at TEXT, created_by TEXT, updated_at TEXT, updated_by TEXT)""")
+        # Resend email analytics: every email we sent (API sync) + live events (webhook: opens, clicks, bounces)
+        c.execute("""CREATE TABLE IF NOT EXISTS emails (
+            id TEXT PRIMARY KEY, recipient TEXT, sender TEXT, subject TEXT, created_at TEXT, last_event TEXT, synced_at TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS email_events (
+            svix_id TEXT PRIMARY KEY, type TEXT, email_id TEXT, recipient TEXT, subject TEXT, link TEXT, at TEXT)""")
+        c.execute("CREATE INDEX IF NOT EXISTS email_events_email ON email_events(email_id)")
         add_col("plans", "campaign_id", "INTEGER")   # set once the plan was sent to Waves
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
@@ -1249,6 +1256,160 @@ def delete_plan(plan_id):
     return {"deleted": int(plan_id)}
 
 
+# ---------------------------------------------------------------- email analytics (Resend)
+
+RESEND_SYNC_MIN = 30
+_resend = {"last_sync": None, "error": None, "running": False}
+
+
+def norm_ts(v):
+    """Resend timestamps come as '2026-10-18 10:01:02.123+00' or ISO; store UTC ISO seconds."""
+    if not v:
+        return None
+    s = str(v).strip().replace(" ", "T", 1)
+    if re.search(r"[+-]\d\d$", s):
+        s += ":00"
+    s = s.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(s).astimezone(timezone.utc).isoformat(timespec="seconds")
+    except ValueError:
+        return None
+
+
+def _recipient(to):
+    if isinstance(to, list):
+        to = to[0] if to else ""
+    return (to or "").strip().lower() or None
+
+
+def sync_resend():
+    """Pull sent emails (newest first) with their latest status. Stops once a whole page is already stored and
+    older than a week (statuses don't change after that)."""
+    if not resend_client.api_enabled() or _resend["running"]:
+        return _resend
+    _resend["running"] = True
+    try:
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        with db() as c:
+            known = {r[0] for r in c.execute("SELECT id FROM emails")}
+
+        def stop(page):
+            return all(e["id"] in known for e in page) and (norm_ts(page[-1].get("created_at")) or "") < week_ago
+        items = resend_client.list_emails(stop_after_known=stop if known else None)
+        with _db_lock, db() as c:
+            for e in items:
+                c.execute("""INSERT INTO emails(id, recipient, sender, subject, created_at, last_event, synced_at) VALUES (?,?,?,?,?,?,?)
+                             ON CONFLICT(id) DO UPDATE SET last_event=excluded.last_event, subject=excluded.subject,
+                             recipient=COALESCE(excluded.recipient, emails.recipient), synced_at=excluded.synced_at""",
+                          (e["id"], _recipient(e.get("to")), e.get("from"), e.get("subject"), norm_ts(e.get("created_at")),
+                           e.get("last_event"), now()))
+        _resend.update(last_sync=now(), error=None, pulled=len(items))
+    except Exception as ex:  # noqa: BLE001 — shown on the Email page
+        print(f"resend sync failed: {ex}", flush=True)
+        _resend.update(error=str(ex)[:300], last_sync=now())
+    finally:
+        _resend["running"] = False
+    return _resend
+
+
+def resend_worker():
+    while True:
+        if resend_client.api_enabled():
+            sync_resend()
+        time.sleep(RESEND_SYNC_MIN * 60)
+
+
+TERMINAL_EVENTS = {"bounced", "complained", "failed", "suppressed"}
+STATUS_RANK = {"scheduled": 0, "sent": 1, "delivery_delayed": 1, "delivered": 2, "opened": 3, "clicked": 4}
+
+
+def record_email_event(headers, body):
+    """Resend webhook → email_events (deduped on svix-id) + keep the email row's latest status."""
+    ev = json.loads(body or b"{}")
+    typ = (ev.get("type") or "").removeprefix("email.")
+    d = ev.get("data") or {}
+    if not ev.get("type", "").startswith("email.") or not d.get("email_id"):
+        return {"ignored": ev.get("type")}
+    rcpt, at = _recipient(d.get("to")), norm_ts(ev.get("created_at")) or now()
+    link = (d.get("click") or {}).get("link")
+    with _db_lock, db() as c:
+        c.execute("INSERT OR IGNORE INTO email_events(svix_id, type, email_id, recipient, subject, link, at) VALUES (?,?,?,?,?,?,?)",
+                  (headers.get("svix-id"), typ, d["email_id"], rcpt, d.get("subject"), link, at))
+        row = c.execute("SELECT last_event FROM emails WHERE id=?", (d["email_id"],)).fetchone()
+        if not row:
+            c.execute("INSERT INTO emails(id, recipient, sender, subject, created_at, last_event) VALUES (?,?,?,?,?,?)",
+                      (d["email_id"], rcpt, d.get("from"), d.get("subject"), norm_ts(d.get("created_at")) or at, typ))
+        else:
+            cur = row[0] or ""
+            if (typ in TERMINAL_EVENTS and cur != "complained") or \
+                    (typ in STATUS_RANK and cur not in TERMINAL_EVENTS and STATUS_RANK[typ] >= STATUS_RANK.get(cur, -1)):
+                c.execute("UPDATE emails SET last_event=? WHERE id=?", (typ, d["email_id"]))
+    return {"ok": True, "type": typ}
+
+
+def email_view(days=None):
+    """Totals, per-subject campaigns, per-day sends and top links. Recipients are matched to our signups:
+    'signed up' = became a user after the email, 'API users' = of those, made at least one API request."""
+    dv = lambda a, b: round(a * 100 / b, 1) if b else None  # noqa: E731
+    since = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat() if days else ""
+    with db() as c:
+        emails = [dict(r) for r in c.execute("SELECT * FROM emails WHERE COALESCE(created_at,'') >= ? ORDER BY created_at", (since,))]
+        ev = {}
+        for r in c.execute("SELECT email_id, type FROM email_events"):
+            ev.setdefault(r[0], set()).add(r[1])
+        links = [dict(r) for r in c.execute("""SELECT link, count(*) AS clicks, count(DISTINCT recipient) AS people
+                 FROM email_events WHERE type='clicked' AND link IS NOT NULL AND at >= ? GROUP BY link ORDER BY clicks DESC LIMIT 15""", (since,))]
+        users = {r[0]: (r[1], r[2]) for r in c.execute("SELECT email, signed_up, requests_all FROM users")}
+        n_events = c.execute("SELECT count(*) FROM email_events").fetchone()[0]
+        last_hook = c.execute("SELECT max(at) FROM email_events").fetchone()[0]
+
+    def flags(e):
+        s, le = ev.get(e["id"], set()), e["last_event"] or ""
+        f = {"sent": 1,
+             "delivered": int(bool(s & {"delivered", "opened", "clicked", "complained"}) or le in ("delivered", "opened", "clicked", "complained")),
+             "opened": int(bool(s & {"opened", "clicked"}) or le in ("opened", "clicked")),
+             "clicked": int("clicked" in s or le == "clicked"),
+             "bounced": int("bounced" in s or le == "bounced"),
+             "complained": int("complained" in s or le == "complained"),
+             "failed": int(bool(s & {"failed", "suppressed"}) or le in ("failed", "suppressed"))}
+        u = users.get(e["recipient"] or "")
+        f["signed_up"] = int(bool(u and e["created_at"] and u[0] >= e["created_at"]))
+        f["api_user"] = int(bool(f["signed_up"] and (u[1] or 0) > 0))
+        f["existing_user"] = int(bool(u and not f["signed_up"]))
+        return f
+
+    def summary(rows):
+        t = collections.Counter()
+        signed, api = set(), set()
+        for e in rows:
+            f = flags(e)
+            t.update(f)
+            if f["signed_up"]:
+                signed.add(e["recipient"])
+            if f["api_user"]:
+                api.add(e["recipient"])
+        t["signups"], t["signup_api"] = len(signed), len(api)
+        t["recipients"] = len({e["recipient"] for e in rows if e["recipient"]})
+        return {**t, "delivery_rate": dv(t["delivered"], t["sent"]), "open_rate": dv(t["opened"], t["delivered"]),
+                "click_rate": dv(t["clicked"], t["delivered"]), "ctor": dv(t["clicked"], t["opened"]),
+                "bounce_rate": dv(t["bounced"], t["sent"]), "complaint_rate": dv(t["complained"], t["delivered"]),
+                "signup_rate": dv(t["signups"], t["recipients"])}
+
+    by_subject = collections.defaultdict(list)
+    by_day = collections.defaultdict(list)
+    for e in emails:
+        by_subject[(e["subject"] or "(no subject)").strip()].append(e)
+        by_day[(e["created_at"] or "")[:10]].append(e)
+    campaigns = sorted(({"subject": k, "first": v[0]["created_at"], "last": v[-1]["created_at"], **summary(v)}
+                        for k, v in by_subject.items()), key=lambda r: r["last"] or "", reverse=True)
+    days_out = [{"day": k, **summary(v)} for k, v in sorted(by_day.items()) if k]
+    return {"totals": summary(emails), "campaigns": campaigns, "days": days_out, "links": links,
+            "setup": {"api": resend_client.api_enabled(), "webhook": resend_client.webhook_enabled(),
+                      "webhook_url": (PUBLIC_URL or "") + "/webhooks/resend", "last_sync": _resend["last_sync"],
+                      "sync_error": _resend["error"], "syncing": _resend["running"], "emails": len(emails),
+                      "events": n_events, "last_webhook": last_hook}}
+
+
 def agencies_list():
     with db() as c:
         return [dict(r) for r in c.execute("SELECT id, name FROM agencies ORDER BY name")]
@@ -1707,9 +1868,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/html; charset=utf-8")
         if u.path == "/api/creators":
             return self._send(200, creators_view())
-        if u.path == "/agencies":
-            with open(os.path.join(HERE, "static", "agencies.html"), "rb") as f:
+        if u.path == "/agencies":   # replaced by Email analytics
+            return self._redirect("/email")
+        if u.path == "/email":
+            with open(os.path.join(HERE, "static", "email.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/api/email":
+            d = q.get("days", [""])[0]
+            return self._send(200, email_view(int(d) if d.isdigit() else None))
         if u.path == "/api/agencies":
             return self._send(200, agencies_view())
         if u.path == "/builder":
@@ -1772,10 +1938,23 @@ class Handler(BaseHTTPRequestHandler):
                     {"error": "access_denied", **({"state": f["state"][0]} if f.get("state") else {})}))
             print(f"mcp authorized: {user['email']} -> {client['n']}", flush=True)
             return self._redirect(mcp_server.issue_code(f, user))
+        if u.path == "/webhooks/resend":   # Resend → us; authenticated by its signature, not a login
+            body = self._body_bytes()
+            if not resend_client.verify(self.headers, body):
+                return self._send(401, {"error": "bad signature"})
+            try:
+                return self._send(200, record_email_event(self.headers, body))
+            except (ValueError, KeyError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
         user = self._require_user(u)
         if not user:
             return
         path = u.path
+        if path == "/api/email/sync":
+            if not resend_client.api_enabled():
+                return self._send(400, {"error": "RESEND_API_KEY is not set"})
+            threading.Thread(target=sync_resend, daemon=True).start()
+            return self._send(200, {"started": True})
         if path == "/api/creators/update":
             b = json.loads(self._body_bytes() or b"{}")
             try:
@@ -1988,5 +2167,6 @@ if __name__ == "__main__":
     threading.Thread(target=fetch_worker, daemon=True).start()
     threading.Thread(target=backup_worker, daemon=True).start()
     threading.Thread(target=backfill_creators, daemon=True).start()
+    threading.Thread(target=resend_worker, daemon=True).start()
     print(f"X campaign analyzer → http://{HOST}:{PORT}  (data: {DB_PATH}, login: {'Google @' + auth.ALLOWED_DOMAIN if auth.ENABLED else 'OFF'})", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

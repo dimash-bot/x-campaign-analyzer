@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email Analytics</title>
+<script>
+// Theme: saved choice (light / dark) wins over the system setting. Set before paint so there's no flash.
+try { const t = localStorage.getItem("xca_theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee; --border: #e3e3de;
+  --text: #1a1a18; --muted: #6b6b66; --accent: #1d6fe0; --accent-ink: #fff; --accent-soft: #e8f0fc;
+  --good: #16794a; --bad: #b42318; --warn: #a15c00; --warn-bg: #fff6e6; --warn-border: #f0d9a8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
+    --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a; --accent-soft: #1c2a40;
+    --good: #4cc38a; --bad: #ff7a6b; --warn: #f0b456; --warn-bg: #2e2412; --warn-border: #5a4520;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
+  --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a; --accent-soft: #1c2a40;
+  --good: #4cc38a; --bad: #ff7a6b; --warn: #f0b456; --warn-bg: #2e2412; --warn-border: #5a4520;
+}
+.theme-btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px;
+  width: 34px; height: 32px; padding: 0; cursor: pointer; font-size: 15px; line-height: 1; }
+.theme-btn:hover { background: var(--surface-2); }
+:root[data-theme="dark"] { color-scheme: dark; } :root[data-theme="light"] { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+nav a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 7px; font-weight: 500; }
+nav a.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.me { color: var(--muted); font-size: 12.5px; }
+.me a { color: inherit; }
+button, select, input { font: inherit; color: inherit; }
+button { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover { background: var(--surface-2); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button:disabled { opacity: .55; cursor: default; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.kpi .l { color: var(--muted); font-size: 12px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; letter-spacing: -0.01em; }
+.kpi .s { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.kpi.hl { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.kpi.hl .v { color: var(--accent); }
+.kpi .v.bad { color: var(--bad); }
+.chips button { font-size: 12.5px; padding: 4px 11px; border-radius: 99px; }
+.chips button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+th.l, td.l { text-align: left; }
+td.subj { max-width: 380px; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+td.subj small { display: block; color: var(--muted); font-weight: 400; font-size: 11.5px; }
+td.good { color: var(--good); font-weight: 650; } td.bad { color: var(--bad); font-weight: 650; }
+td.link { max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
+td.link a { color: var(--accent); text-decoration: none; }
+.empty { color: var(--muted); padding: 18px 0; text-align: center; }
+.chart { position: relative; height: 240px; }
+/* setup */
+.setup { border-color: var(--warn-border); background: var(--warn-bg); }
+.setup.ok { border-color: var(--border); background: var(--surface); }
+.steps { margin: 8px 0 0; padding-left: 20px; }
+.steps li { margin: 6px 0; }
+.steps code, .copy code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; font-size: 12.5px; }
+.stat { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; margin-right: 16px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+.dot.on { background: var(--good); }
+.copy { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+.err { color: var(--bad); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <h1>X Campaign Analyzer</h1>
+      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/email" class="on">Email</a><a href="/builder">Wave builder</a></nav>
+      <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle light / dark theme"></button>
+    </div>
+    <span class="me" id="me"></span>
+  </header>
+
+  <section class="card setup" id="setup"></section>
+
+  <div class="row" style="justify-content:space-between;margin-bottom:12px">
+    <div><h2 style="margin:0">Email analytics</h2><p class="sub" id="asof" style="margin:2px 0 0"></p></div>
+    <div class="row chips" id="period">
+      <button data-d="7">7 days</button><button data-d="30">30 days</button><button data-d="90">90 days</button><button data-d="">All time</button>
+    </div>
+  </div>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <h2>Sends by day</h2>
+    <p class="sub">Emails sent, opened and clicked each day.</p>
+    <div class="chart"><canvas id="chart"></canvas></div>
+  </section>
+
+  <section class="card">
+    <h2>By email (subject)</h2>
+    <p class="sub">Each subject line counts as one campaign. <b>Signed up</b> = recipients who created an account after getting it; <b>API users</b> = of those, who made at least one API request.</p>
+    <div class="table-wrap">
+      <table id="camps">
+        <thead><tr>
+          <th class="l">Subject</th><th>Sent</th><th>Delivered</th><th>Open rate</th><th>Click rate</th><th>Click → open</th>
+          <th>Bounced</th><th>Spam</th><th>Signed up</th><th>API users</th><th class="l">Last sent</th>
+        </tr></thead>
+        <tbody id="campRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Top clicked links</h2>
+    <p class="sub">From the webhook (needs click tracking on in Resend).</p>
+    <div class="table-wrap">
+      <table id="links"><thead><tr><th class="l">Link</th><th>Clicks</th><th>People</th></tr></thead><tbody id="linkRows"></tbody></table>
+    </div>
+    <p class="note">Open rates are inflated by Apple Mail privacy (it pre-loads every email), so click rate and signups are the numbers to trust.</p>
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ok = (n) => n != null && isFinite(n);
+const int = (n) => (n || 0).toLocaleString();
+const pct = (n) => ok(n) ? n.toFixed(1) + "%" : "—";
+const when = (t) => t ? new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "never";
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+  return j;
+}
+let days = "30", D = null, chart = null;
+try { const s = localStorage.getItem("xca_email_days"); if (s !== null) days = s; } catch (e) {}
+
+function renderSetup(S) {
+  const done = S.api && S.webhook;
+  const el = $("setup");
+  el.classList.toggle("ok", done);
+  const status = `<span class="stat"><span class="dot ${S.api ? "on" : ""}"></span>API key ${S.api ? `connected · last sync ${when(S.last_sync)}` : "not set"}</span>
+    <span class="stat"><span class="dot ${S.webhook ? "on" : ""}"></span>Webhook ${S.webhook ? `on · last event ${when(S.last_webhook)}` : "not set"}</span>`;
+  const sync = S.api ? `<button id="syncBtn" ${S.syncing ? "disabled" : ""}>${S.syncing ? "Syncing…" : "↻ Sync now"}</button>` : "";
+  const err = S.sync_error ? `<div class="err">Last sync failed: ${esc(S.sync_error)}</div>` : "";
+  if (done) {
+    el.innerHTML = `<div class="row" style="justify-content:space-between"><div>${status}</div>${sync}</div>${err}
+      <details style="margin-top:6px"><summary class="sub" style="cursor:pointer;margin:0">How it's connected</summary>${steps(S)}</details>`;
+  } else {
+    el.innerHTML = `<h2>Connect Resend</h2><p class="sub" style="margin-bottom:6px">Two pieces: an API key pulls every email you've sent and its
+      status (history), and a webhook streams opens, clicks and bounces as they happen. Set both in Railway → service <b>web</b> → Variables.</p>
+      <div style="margin-bottom:6px">${status}</div>${steps(S)}${err}<div class="row" style="margin-top:8px">${sync}</div>`;
+  }
+  $("syncBtn")?.addEventListener("click", syncNow);
+  el.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => {
+    navigator.clipboard?.writeText(b.dataset.copy); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200);
+  });
+}
+function steps(S) {
+  const url = S.webhook_url.startsWith("http") ? S.webhook_url : location.origin + "/webhooks/resend";
+  return `<ol class="steps">
+    <li><b>API key</b> — resend.com → <b>API Keys</b> → Create API key, permission <b>Full access</b> (sending-only keys can't read emails).
+      Add it in Railway as <code>RESEND_API_KEY</code>. ${S.api ? "✓ done" : ""}</li>
+    <li><b>Webhook</b> — resend.com → <b>Webhooks</b> → Add endpoint, URL:
+      <div class="copy"><code>${esc(url)}</code><button data-copy="${esc(url)}">Copy</button></div>
+      Events: <code>email.sent</code> <code>email.delivered</code> <code>email.opened</code> <code>email.clicked</code> <code>email.bounced</code> <code>email.complained</code>.
+      Then copy its <b>Signing secret</b> (starts with <code>whsec_</code>) into Railway as <code>RESEND_WEBHOOK_SECRET</code>. ${S.webhook ? "✓ done" : ""}</li>
+    <li><b>Tracking</b> — resend.com → <b>Domains</b> → your sending domain → turn on <b>Open tracking</b> and <b>Click tracking</b>.</li>
+    <li>Railway redeploys after you save the variables; history syncs within a minute, then every 30 minutes.</li>
+  </ol>`;
+}
+async function syncNow() {
+  $("syncBtn").disabled = true; $("syncBtn").textContent = "Syncing…";
+  try { await api("/api/email/sync", {}); } catch (e) { alert("Couldn't sync: " + e.message); }
+  setTimeout(load, 4000);
+}
+
+function render() {
+  const T = D.totals;
+  const k = (l, v, s = "", cls = "", vcls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v ${vcls}">${v}</div><div class="s">${s}</div></div>`;
+  $("kpis").innerHTML = [
+    k("Emails sent", int(T.sent), `${int(T.recipients)} people`),
+    k("Delivered", pct(T.delivery_rate), `${int(T.delivered)} emails`),
+    k("Open rate", pct(T.open_rate), `${int(T.opened)} opened`),
+    k("Click rate", pct(T.click_rate), `${int(T.clicked)} clicked`, "hl"),
+    k("Click → open", pct(T.ctor), "clicks ÷ opens"),
+    k("Bounced", pct(T.bounce_rate), `${int(T.bounced)} emails`, "", T.bounce_rate > 4 ? "bad" : ""),
+    k("Spam complaints", pct(T.complaint_rate), `${int(T.complained)} people`, "", T.complaint_rate > 0.1 ? "bad" : ""),
+    k("Signed up after", int(T.signups), `${pct(T.signup_rate)} of people emailed`, "hl"),
+    k("…became API users", int(T.signup_api), T.signups ? `${pct(T.signup_api * 100 / T.signups)} of those signups` : ""),
+  ].join("");
+  $("asof").textContent = `${D.setup.emails ? int(D.setup.emails) + " emails" : "No emails yet"} · ${days ? "last " + days + " days" : "all time"} · refreshes every minute`;
+  document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("on", b.dataset.d === days));
+
+  const best = (f) => Math.max(...D.campaigns.filter((c) => c.sent >= 20 && ok(c[f])).map((c) => c[f]));
+  const bo = best("open_rate"), bc = best("click_rate");
+  $("campRows").innerHTML = D.campaigns.length ? D.campaigns.map((c) => `<tr>
+      <td class="l subj" title="${esc(c.subject)}">${esc(c.subject)}<small>${int(c.recipients)} people · first ${when(c.first)}</small></td>
+      <td>${int(c.sent)}</td><td>${pct(c.delivery_rate)}</td>
+      <td class="${c.open_rate === bo && c.sent >= 20 ? "good" : ""}">${pct(c.open_rate)}</td>
+      <td class="${c.click_rate === bc && c.sent >= 20 ? "good" : ""}">${pct(c.click_rate)}</td>
+      <td>${pct(c.ctor)}</td>
+      <td class="${c.bounce_rate > 4 ? "bad" : ""}">${pct(c.bounce_rate)}</td>
+      <td class="${c.complaint_rate > 0.1 ? "bad" : ""}">${c.complained ? int(c.complained) : "—"}</td>
+      <td>${c.signups ? int(c.signups) : "—"}</td><td>${c.signup_api ? int(c.signup_api) : "—"}</td>
+      <td class="l">${when(c.last)}</td></tr>`).join("")
+    : `<tr><td colspan="11" class="empty">${D.setup.api || D.setup.webhook ? "No emails in this period." : "Connect Resend above to see your emails."}</td></tr>`;
+  $("linkRows").innerHTML = D.links.length ? D.links.map((l) => `<tr><td class="l link"><a href="${esc(l.link)}" target="_blank" rel="noopener">${esc(l.link)}</a></td><td>${int(l.clicks)}</td><td>${int(l.people)}</td></tr>`).join("")
+    : `<tr><td colspan="3" class="empty">No clicks recorded yet.</td></tr>`;
+  drawChart();
+}
+function drawChart() {
+  if (!window.Chart) return;
+  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  const grid = dark ? "#2c2c2a" : "#e1e0d9", muted = "#898781";
+  const data = { labels: D.days.map((d) => new Date(d.day + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })),
+    datasets: [
+      { label: "Sent", data: D.days.map((d) => d.sent), backgroundColor: dark ? "#3a4a63" : "#c9d8f2", maxBarThickness: 26, borderRadius: 3 },
+      { label: "Opened", data: D.days.map((d) => d.opened), backgroundColor: dark ? "#3987e5" : "#2a78d6", maxBarThickness: 26, borderRadius: 3 },
+      { label: "Clicked", data: D.days.map((d) => d.clicked), backgroundColor: dark ? "#4cc38a" : "#16794a", maxBarThickness: 26, borderRadius: 3 },
+    ] };
+  if (chart) { chart.data = data; chart.update(); return; }
+  Chart.defaults.color = muted;
+  chart = new Chart($("chart"), { type: "bar", data, options: { responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { position: "bottom", labels: { boxWidth: 10, boxHeight: 10 } } },
+    scales: { x: { grid: { display: false } }, y: { beginAtZero: true, grid: { color: grid } } } } });
+}
+window.addEventListener("xca-theme", () => { if (chart) { chart.destroy(); chart = null; } if (D) drawChart(); });
+$("period").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-d]"); if (!b) return;
+  days = b.dataset.d; try { localStorage.setItem("xca_email_days", days); } catch (err) {}
+  load();
+});
+let timer;
+async function load() {
+  clearTimeout(timer);
+  try { D = await api("/api/email" + (days ? "?days=" + days : "")); renderSetup(D.setup); render(); } catch (e) { /* keep last render */ }
+  timer = setTimeout(load, D?.setup?.syncing ? 4000 : 60000);
+}
+api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
+load();
+</script>
+<script>
+// Light / dark toggle (all pages share the saved choice)
+(function () {
+  const root = document.documentElement, btn = document.getElementById("themeBtn");
+  const dark = () => root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  const paint = () => { btn.textContent = dark() ? "☀" : "☾"; btn.title = dark() ? "Switch to light theme" : "Switch to dark theme"; };
+  btn.onclick = () => {
+    root.dataset.theme = dark() ? "light" : "dark";
+    try { localStorage.setItem("xca_theme", root.dataset.theme); } catch (e) {}
+    paint(); window.dispatchEvent(new Event("xca-theme"));
+  };
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paint);
+  paint();
+})();
+</script>
+<script src="/colresize.js"></script>
+</body>
+</html>
