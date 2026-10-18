@@ -49,7 +49,11 @@ def access_token(refresh_token: str) -> str:
 def _get(token, path, params=None):
     r = requests.get(API + path, params=params or {}, headers={"Authorization": "Bearer " + token}, timeout=30)
     if r.status_code == 403 and ("has not been used" in r.text or "SERVICE_DISABLED" in r.text):
-        raise RuntimeError("The Gmail Postmaster Tools API is turned off in the Google Cloud project — enable it (link on the page).")
+        try:
+            msg = r.json()["error"]["message"].split(". ")[0]
+        except (ValueError, KeyError):
+            msg = r.text[:200]
+        raise RuntimeError(f"The Gmail Postmaster Tools API is turned off in the Google Cloud project ({msg}). If you just enabled it, wait a few minutes.")
     if r.status_code != 200:
         raise RuntimeError(f"Postmaster HTTP {r.status_code}: {r.text[:200]}")
     return r.json()
