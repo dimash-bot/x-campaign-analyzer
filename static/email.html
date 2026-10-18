@@ -356,6 +356,24 @@ function render() {
   drawChart();
 }
 // ---- Gmail spam rate from Google Postmaster Tools
+const REQ = { SPF: "SPF", DKIM: "DKIM", SPF_AND_DKIM: "SPF + DKIM", DMARC_POLICY: "DMARC policy", DMARC_ALIGNMENT: "DMARC alignment",
+  MESSAGE_FORMATTING: "Message format", DNS_RECORDS: "DNS records (PTR)", ENCRYPTION: "TLS encryption", USER_REPORTED_SPAM_RATE: "Spam rate",
+  ONE_CLICK_UNSUBSCRIBE: "One-click unsubscribe", HONOR_UNSUBSCRIBE: "Honors unsubscribes" };
+const nice = (s) => String(s || "").toLowerCase().replace(/_/g, " ");
+function complianceTile(C) {
+  const rows = Object.entries(C?.rows || {}), bad = rows.filter(([, v]) => v === "NEEDS_WORK");
+  const dv = C?.deliverability || {};
+  return `<div class="kpi" title="Google's checklist for bulk senders (Gmail rules since 2024). Every row should say compliant; 'needs work' items can send mail to spam.">
+    <div class="l">Gmail compliance</div>
+    <div class="v"><span class="rep ${!rows.length ? "" : bad.length ? "LOW" : "HIGH"}">${!rows.length ? "no data" : bad.length ? bad.length + " need work" : "All passing"}</span></div>
+    <div class="s">${dv.state ? "deliverability: " + nice(dv.state) + (dv.reason && dv.reason !== "REASON_UNSPECIFIED" ? " — " + nice(dv.reason) : "") : "Google's bulk-sender rules"}</div></div>`;
+}
+function complianceList(C) {
+  const rows = Object.entries(C?.rows || {});
+  if (!rows.length) return "";
+  return `<div class="row" style="gap:6px;margin:-2px 0 10px">${rows.map(([k, v]) =>
+    `<span class="rep ${v === "COMPLIANT" ? "HIGH" : v === "NEEDS_WORK" ? "LOW" : ""}" style="font-size:11.5px;font-weight:600">${v === "COMPLIANT" ? "✓" : v === "NEEDS_WORK" ? "!" : "·"} ${esc(REQ[k] || nice(k))}</span>`).join("")}</div>`;
+}
 const gmCharts = [];
 function renderGmail(G) {
   const el = $("gmail");
@@ -381,21 +399,21 @@ function renderGmail(G) {
       <div><h2 style="margin:0">Gmail spam rate <span class="sub">— Google Postmaster Tools</span></h2>
         <p class="sub" style="margin:2px 0 0">Connected as ${esc(G.email || "?")} · updated ${when(G.last_sync)} · domains: ${esc(G.all_domains.join(", ") || "none yet")}</p></div>
       <div class="row"><button id="pmSync">↻ Refresh</button><button id="pmOff" title="Remove the Google connection">Disconnect</button></div>
-    </div>${G.error ? `<div class="err">${esc(G.error)}</div>` : ""}${flash}`;
+    </div>${G.error ? `<div class="err">${esc(G.error)}</div>` : ""}${flash}${(G.notes || []).length ? `<p class="sub" style="margin:4px 0 0">${G.notes.map(esc).join(" · ")}</p>` : ""}`;
   const body = G.domains.length ? G.domains.map((d, i) => {
     const L = d.latest;
-    if (!L) return `<div class="gm-dom"><h3>${esc(d.domain)}</h3><p class="sub">No Gmail data yet. Postmaster shows numbers only for days with enough mail to Gmail addresses (roughly 100+), starting a day or two after the domain is verified.</p></div>`;
+    if (!L) return `<div class="gm-dom"><h3>${esc(d.domain)}</h3>${d.compliance ? `<div class="gm-row">${complianceTile(d.compliance)}</div>${complianceList(d.compliance)}` : ""}<p class="sub">No daily Gmail numbers yet. Postmaster shows numbers only for days with enough mail to Gmail addresses (roughly 100+), starting a day or two after the domain is verified.</p></div>`;
     const auth = (x) => ok(x) ? (x * 100).toFixed(0) + "%" : "—";
     return `<div class="gm-dom"><h3>${esc(d.domain)} <span class="sub">· latest day ${fmtDay(L.day)}</span></h3>
       <div class="gm-row">
         <div class="kpi" title="${esc(tip("spam"))}"><div class="l">Gmail spam rate</div><div class="v ${spamCls(L.spam)}">${f(L.spam)}</div>
           <div class="s">${ok(L.spam_lo) ? `likely ${f(L.spam_lo)}–${f(L.spam_hi)}` : "keep under 0.10%"}</div></div>
         <div class="kpi"><div class="l">7-day average</div><div class="v ${spamCls(d.spam_7d)}">${f(d.spam_7d)}</div><div class="s">limit 0.30%</div></div>
-        <div class="kpi" title="Google's view of the domain: HIGH = follows the rules, MEDIUM = some spam, LOW / BAD = mail goes to spam or gets rejected"><div class="l">Domain reputation</div>
-          <div class="v"><span class="rep ${esc(L.rep || "")}">${esc(L.rep || "no data")}</span></div><div class="s">HIGH › MEDIUM › LOW › BAD</div></div>
+        ${complianceTile(d.compliance)}
         <div class="kpi" title="Share of your mail to Gmail that passed each authentication check. All three should be ~100%."><div class="l">SPF · DKIM · DMARC</div>
           <div class="v" style="font-size:16px">${auth(L.spf)} · ${auth(L.dkim)} · ${auth(L.dmarc)}</div><div class="s">should all be ~100%</div></div>
       </div>
+      ${complianceList(d.compliance)}
       <div class="gm-chart"><canvas id="gm${i}"></canvas></div></div>`;
   }).join("") : `<p class="sub" style="margin-top:8px">${G.all_domains.length ? "No Postmaster domain matches the chosen sending domain." : "This Google account doesn't see any domains in Postmaster Tools yet — verify one there, or connect with the account that did."}</p>`;
   el.innerHTML = head + body;

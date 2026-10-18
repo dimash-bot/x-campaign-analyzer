@@ -1362,21 +1362,27 @@ def sync_postmaster():
         return
     try:
         token = postmaster.access_token(refresh)
-        doms = postmaster.domains(token)
-        rows = []
-        for d in doms:
-            for t in postmaster.traffic_stats(token, d):
-                day = t["name"].rsplit("/", 1)[-1]
-                day = f"{day[:4]}-{day[4:6]}-{day[6:8]}"
-                ips = {r.get("reputation"): int(r.get("ipCount") or 0) for r in t.get("ipReputations", []) if int(r.get("ipCount") or 0)}
-                rows.append((d, day, t.get("userReportedSpamRatio"), t.get("userReportedSpamRatioLowerBound"),
-                             t.get("userReportedSpamRatioUpperBound"), t.get("domainReputation"), json.dumps(ips) if ips else None,
-                             t.get("spfSuccessRatio"), t.get("dkimSuccessRatio"), t.get("dmarcSuccessRatio"),
-                             json.dumps(t["deliveryErrors"]) if t.get("deliveryErrors") else None))
+        listed = postmaster.domains(token)
+        doms = [d["domain"] for d in listed]
+        rows, comp, notes = [], {}, []
+        for d in listed:
+            if not d["verified"]:
+                notes.append(f"{d['domain']} isn't verified in Postmaster Tools yet")
+                continue
+            stats, n = postmaster.daily_stats(token, d["domain"])
+            notes += [f"{d['domain']} {x}" for x in n]
+            for day, v in stats.items():
+                rows.append((d["domain"], day, v.get("spam"), None, None, None, None, v.get("spf"), v.get("dkim"), v.get("dmarc"), None))
+            try:
+                comp[d["domain"]] = postmaster.compliance(token, d["domain"])
+            except RuntimeError as e:
+                notes.append(f"{d['domain']} compliance: {e}")
         with _db_lock, db() as c:
             c.executemany("""INSERT OR REPLACE INTO gmail_stats(domain, day, spam, spam_lo, spam_hi, domain_rep, ip_rep, spf, dkim, dmarc, errors)
                              VALUES (?,?,?,?,?,?,?,?,?,?,?)""", rows)
             kv_set(c, "pm_domains", json.dumps(doms))
+            kv_set(c, "pm_compliance", json.dumps(comp))
+            kv_set(c, "pm_notes", json.dumps(notes[:10]))
             kv_set(c, "pm_last_sync", now())
             kv_set(c, "pm_error", None)
     except Exception as ex:  # noqa: BLE001 — shown on the Email page
@@ -1398,7 +1404,8 @@ def gmail_view(sender=None):
     """Postmaster status + daily Gmail numbers per domain (only the chosen sending domain when one is picked)."""
     want = sender_key(sender).rsplit("@", 1)[-1] if sender else ""
     with db() as c:
-        st = {k: kv_get(c, k) for k in ("pm_refresh", "pm_email", "pm_connected_at", "pm_error", "pm_last_sync", "pm_domains")}
+        st = {k: kv_get(c, k) for k in ("pm_refresh", "pm_email", "pm_connected_at", "pm_error", "pm_last_sync", "pm_domains",
+                                        "pm_compliance", "pm_notes")}
         rows = [dict(r) for r in c.execute("SELECT * FROM gmail_stats WHERE day >= ? ORDER BY day",
                                            ((datetime.now(timezone.utc) - timedelta(days=90)).date().isoformat(),))]
     doms = [d for d in json.loads(st["pm_domains"] or "[]") if not EMAIL_DOMAINS or d in EMAIL_DOMAINS or any(x.endswith("." + d) for x in EMAIL_DOMAINS)]
@@ -1411,9 +1418,11 @@ def gmail_view(sender=None):
                  "errors": json.loads(r["errors"]) if r["errors"] else None} for r in rows if r["domain"] == d]
         last7 = [x["spam"] for x in days[-7:] if x["spam"] is not None]
         out.append({"domain": d, "days": days, "latest": days[-1] if days else None,
-                    "spam_7d": round(sum(last7) / len(last7), 5) if last7 else None})
+                    "spam_7d": round(sum(last7) / len(last7), 6) if last7 else None,
+                    "compliance": json.loads(st["pm_compliance"] or "{}").get(d)})
     return {"connected": bool(st["pm_refresh"]), "email": st["pm_email"], "connected_at": st["pm_connected_at"],
-            "error": st["pm_error"], "last_sync": st["pm_last_sync"], "domains": out, "all_domains": doms}
+            "error": st["pm_error"], "last_sync": st["pm_last_sync"], "domains": out, "all_domains": doms,
+            "notes": json.loads(st["pm_notes"] or "[]")}
 
 
 def sync_broadcasts():
