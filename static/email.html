@@ -139,6 +139,7 @@ td.link a { color: var(--accent); text-decoration: none; }
         <tbody id="bcRows"></tbody>
       </table>
     </div>
+    <p class="note" id="bcNote"></p>
   </section>
 
   <section class="card" id="subjCard">
@@ -231,7 +232,7 @@ function renderPickers() {
   if (domain && !doms.some((d) => d.domain === domain)) doms.push({ domain, emails: 0 });
   $("domSel").innerHTML = `<option value="">All domains</option>` + doms.map((d) =>
     `<option value="${esc(d.domain)}" ${d.domain === domain ? "selected" : ""}>${esc(d.domain)} (${int(d.emails)})</option>`).join("");
-  const sentB = D.broadcasts.filter((b) => b.sent_at);
+  const sentB = D.broadcasts.filter((b) => b.sent_at && b.sent);
   $("bcSel").innerHTML = `<option value="" ${!bc ? "selected" : ""}>All emails (not just broadcasts)</option>`
     + sentB.map((b) => `<option value="${esc(b.id)}" ${b.id === D.broadcast ? "selected" : ""}>${esc(b.name || b.subject || "Untitled")} · ${fmtDay(b.sent_at)} · ${int(b.sent)} emails</option>`).join("");
   $("period").hidden = !!D.broadcast;
@@ -243,7 +244,9 @@ function render() {
   renderPickers();
   const B = D.broadcasts.find((b) => b.id === D.broadcast);
   $("title").textContent = B ? (B.name || B.subject || "Broadcast") : `All emails${domain ? " from " + domain : ""}`;
-  $("bcRows").innerHTML = D.broadcasts.length ? D.broadcasts.map((b) => `<tr data-bc="${esc(b.id)}" class="${b.id === D.broadcast ? "sel" : ""}">
+  const shown = D.broadcasts.filter((b) => b.sent), noData = D.broadcasts.length - shown.length;
+  $("bcNote").textContent = noData ? `${noData} older broadcast${noData === 1 ? "" : "s"} not shown: Resend no longer keeps their emails, so there's nothing to measure.` : "";
+  $("bcRows").innerHTML = shown.length ? shown.map((b) => `<tr data-bc="${esc(b.id)}" class="${b.id === D.broadcast ? "sel" : ""}">
       <td class="l subj" title="${esc(b.subject || "")}">${esc(b.name || "Untitled")}<small>${esc(b.subject || "")} · ${esc(b.domain || "")}</small></td>
       <td class="l">${b.sent_at ? fmtDay(b.sent_at) : "<span style='color:var(--muted)'>not sent</span>"}</td>
       <td>${int(b.sent)}</td><td>${pct(b.delivery_rate)}</td><td>${pct(b.open_rate)}</td><td>${pct(b.click_rate)}</td>
