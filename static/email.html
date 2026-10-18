@@ -133,7 +133,7 @@ td.link a { color: var(--accent); text-decoration: none; }
     <div class="table-wrap">
       <table id="bcs">
         <thead><tr>
-          <th class="l">Broadcast</th><th class="l">Sent</th><th>Emails</th><th>Delivered</th><th>Open rate</th><th>Click rate</th>
+          <th class="l">Broadcast</th><th class="l">Sent</th><th>Emails</th><th>Delivered</th><th>Open rate</th><th title="Click-through rate: clicks ÷ delivered">CTR</th><th title="Click-to-open: clicks ÷ opens">CTOR</th>
           <th>Bounced</th><th>Spam</th><th>Signed up</th><th>API users</th>
         </tr></thead>
         <tbody id="bcRows"></tbody>
@@ -148,7 +148,7 @@ td.link a { color: var(--accent); text-decoration: none; }
     <div class="table-wrap">
       <table id="camps">
         <thead><tr>
-          <th class="l">Subject</th><th>Sent</th><th>Delivered</th><th>Open rate</th><th>Click rate</th><th>Click → open</th>
+          <th class="l">Subject</th><th>Sent</th><th>Delivered</th><th>Open rate</th><th title="Click-through rate: clicks ÷ delivered">CTR</th><th title="Click-to-open: clicks ÷ opens">CTOR</th>
           <th>Bounced</th><th>Spam</th><th>Signed up</th><th>API users</th><th class="l">Last sent</th>
         </tr></thead>
         <tbody id="campRows"></tbody>
@@ -245,23 +245,24 @@ function render() {
   const B = D.broadcasts.find((b) => b.id === D.broadcast);
   $("title").textContent = B ? (B.name || B.subject || "Broadcast") : `All emails${domain ? " from " + domain : ""}`;
   const shown = D.broadcasts.filter((b) => b.sent), noData = D.broadcasts.length - shown.length;
+  const ctrs = shown.filter((b) => b.sent >= 50 && b.click_rate > 0).map((b) => b.click_rate), bestCtr = ctrs.length > 1 ? Math.max(...ctrs) : null;
   $("bcNote").textContent = noData ? `${noData} older broadcast${noData === 1 ? "" : "s"} not shown: Resend no longer keeps their emails, so there's nothing to measure.` : "";
   $("bcRows").innerHTML = shown.length ? shown.map((b) => `<tr data-bc="${esc(b.id)}" class="${b.id === D.broadcast ? "sel" : ""}">
       <td class="l subj" title="${esc(b.subject || "")}">${esc(b.name || "Untitled")}<small>${esc(b.subject || "")} · ${esc(b.domain || "")}</small></td>
       <td class="l">${b.sent_at ? fmtDay(b.sent_at) : "<span style='color:var(--muted)'>not sent</span>"}</td>
-      <td>${int(b.sent)}</td><td>${pct(b.delivery_rate)}</td><td>${pct(b.open_rate)}</td><td>${pct(b.click_rate)}</td>
+      <td>${int(b.sent)}</td><td>${pct(b.delivery_rate)}</td><td>${pct(b.open_rate)}</td><td class="${b.click_rate === bestCtr ? "good" : ""}">${pct(b.click_rate)}</td><td>${pct(b.ctor)}</td>
       <td class="${b.bounce_rate > 4 ? "bad" : ""}">${pct(b.bounce_rate)}</td>
       <td class="${b.complaint_rate > 0.1 ? "bad" : ""}">${b.complained ? int(b.complained) : "—"}</td>
       <td>${b.signups ? int(b.signups) : "—"}</td><td>${b.signup_api ? int(b.signup_api) : "—"}</td></tr>`).join("")
-    : `<tr><td colspan="10" class="empty">${D.setup.api ? "No broadcasts yet — they appear after the next sync." : "Connect Resend above."}</td></tr>`;
+    : `<tr><td colspan="11" class="empty">${D.setup.api ? "No broadcasts yet — they appear after the next sync." : "Connect Resend above."}</td></tr>`;
   const T = D.totals;
   const k = (l, v, s = "", cls = "", vcls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v ${vcls}">${v}</div><div class="s">${s}</div></div>`;
   $("kpis").innerHTML = [
     k("Emails sent", int(T.sent), `${int(T.recipients)} people`),
     k("Delivered", pct(T.delivery_rate), `${int(T.delivered)} emails`),
     k("Open rate", pct(T.open_rate), `${int(T.opened)} opened`),
-    k("Click rate", pct(T.click_rate), `${int(T.clicked)} clicked`, "hl"),
-    k("Click → open", pct(T.ctor), "clicks ÷ opens"),
+    k("CTR", pct(T.click_rate), `${int(T.clicked)} clicked ÷ ${int(T.delivered)} delivered`, "hl"),
+    k("CTOR", pct(T.ctor), "click-to-open: clicks ÷ opens"),
     k("Bounced", pct(T.bounce_rate), `${int(T.bounced)} emails`, "", T.bounce_rate > 4 ? "bad" : ""),
     k("Spam complaints", pct(T.complaint_rate), `${int(T.complained)} people`, "", T.complaint_rate > 0.1 ? "bad" : ""),
     k("Signed up after", int(T.signups), `${pct(T.signup_rate)} of people emailed`, "hl"),
