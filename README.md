@@ -54,6 +54,7 @@ python3 server.py            # http://localhost:8787 — login is off unless GOO
    | `ALLOWED_DOMAIN` | optional, default `nace.ai` |
    | `X_AUTH_TOKEN`, `X_CT0` | optional — only if X blocks guest access from Railway (see below) |
    | `OUTREACH_ACCOUNTS` | optional — the "Contacted from" dropdown, default `aiza,maiya,dimash,nace`; `name=xhandle` adds a link to that X account |
+| `EMAIL_DOMAINS` | optional — sending domains the Email tab covers, default `drex-usa.com` (comma-separated; other mail in the Resend account is ignored) |
 | `RESEND_API_KEY` | optional — Resend key with **Full access**; the Email tab syncs every sent email + its status every 30 min |
 | `RESEND_WEBHOOK_SECRET` | optional — signing secret (`whsec_…`) of a Resend webhook pointed at `https://<domain>/webhooks/resend` (live opens, clicks, bounces) |
 | `APIFY_TOKEN` | optional — pulls each creator's last ~20 posts via Apify (`apidojo/tweet-scraper`, ~$0.02/account, at most every 3 days) so Influencers can rate accounts we haven't paid yet without an X login |

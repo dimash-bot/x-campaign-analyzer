@@ -291,6 +291,7 @@ const fmtDay = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: "sh
 function renderPickers() {
   const doms = D.domains || [];
   if (domain && !doms.some((d) => d.domain === domain)) doms.push({ domain, emails: 0 });
+  $("domSel").closest("label").hidden = doms.length < 2;   // one sending domain → nothing to pick
   $("domSel").innerHTML = `<option value="">All domains</option>` + doms.map((d) =>
     `<option value="${esc(d.domain)}" ${d.domain === domain ? "selected" : ""}>${esc(d.domain)} (${int(d.emails)})</option>`).join("");
   const sentB = D.broadcasts.filter((b) => b.sent_at && b.sent);

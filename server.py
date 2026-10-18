@@ -1401,7 +1401,7 @@ def gmail_view(sender=None):
         st = {k: kv_get(c, k) for k in ("pm_refresh", "pm_email", "pm_connected_at", "pm_error", "pm_last_sync", "pm_domains")}
         rows = [dict(r) for r in c.execute("SELECT * FROM gmail_stats WHERE day >= ? ORDER BY day",
                                            ((datetime.now(timezone.utc) - timedelta(days=90)).date().isoformat(),))]
-    doms = json.loads(st["pm_domains"] or "[]")
+    doms = [d for d in json.loads(st["pm_domains"] or "[]") if not EMAIL_DOMAINS or d in EMAIL_DOMAINS or any(x.endswith("." + d) for x in EMAIL_DOMAINS)]
     out = []
     for d in doms:
         if want and not (want == d or want.endswith("." + d)):
@@ -1488,6 +1488,15 @@ def sender_domain(s):
     return sender_key(s).rsplit("@", 1)[-1]
 
 
+# Sending domains the Email tab covers (other products' mail in the same Resend account is left out)
+EMAIL_DOMAINS = [d.strip().lower() for d in os.environ.get("EMAIL_DOMAINS", "drex-usa.com").split(",") if d.strip()]
+
+
+def in_scope(s):
+    d = sender_domain(s)
+    return not EMAIL_DOMAINS or any(d == x or d.endswith("." + x) for x in EMAIL_DOMAINS)
+
+
 def sender_match(s, want):
     """`want` = an address (hi@drex.ai) or a whole sending domain (drex.ai)."""
     if not want:
@@ -1534,8 +1543,9 @@ def email_view(days=None, sender=None, include_system=False, broadcast=None):
     dv = lambda a, b: round(a * 100 / b, 1) if b else None  # noqa: E731
     since = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat() if days else ""
     with db() as c:
-        everything = [dict(r) for r in c.execute("SELECT * FROM emails ORDER BY created_at")]
+        everything = [e for e in (dict(r) for r in c.execute("SELECT * FROM emails ORDER BY created_at")) if in_scope(e["sender"])]
         bcs, bmap = map_broadcasts(c, everything)
+        bcs = [b for b in bcs if in_scope(b["sender"])]
         ev = {}
         for r in c.execute("SELECT email_id, type FROM email_events"):
             ev.setdefault(r[0], set()).add(r[1])
@@ -1560,7 +1570,8 @@ def email_view(days=None, sender=None, include_system=False, broadcast=None):
         return f
 
     def summary(rows):
-        t = collections.Counter()
+        t = collections.Counter(dict.fromkeys(("sent", "delivered", "opened", "clicked", "bounced", "complained", "failed",
+                                               "signed_up", "api_user", "existing_user"), 0))
         signed, api = set(), set()
         for e in rows:
             f = flags(e)
