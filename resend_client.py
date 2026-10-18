@@ -35,18 +35,36 @@ def _get(path):
             raise RuntimeError(f"Resend HTTP {e.code}: {body}") from None
 
 
-def list_emails(max_pages=100, stop_after_known=None):
-    """Newest first, 100 per page. `stop_after_known(page)` → True stops paging (we already have the rest)."""
-    out, after = [], None
+def list_emails(max_pages=100, stop_after_known=None, after=None):
+    """Newest first, 100 per page, starting below email id `after` (older ones). `stop_after_known(page)` → True
+    stops paging (we already have the rest). Returns (emails, more_left)."""
+    out, more = [], True
     for _ in range(max_pages):
         page = _get("/emails?limit=100" + (f"&after={after}" if after else ""))
         data = page.get("data") or []
         out.extend(data)
-        if not page.get("has_more") or not data or (stop_after_known and stop_after_known(data)):
+        more = bool(page.get("has_more") and data)
+        if not more or (stop_after_known and stop_after_known(data)):
             break
         after = data[-1]["id"]
         time.sleep(0.6)
-    return out
+    return out, more
+
+
+def list_broadcasts():
+    out, after = [], None
+    while True:
+        page = _get("/broadcasts?limit=100" + (f"&after={after}" if after else ""))
+        data = page.get("data") or []
+        out.extend(data)
+        if not page.get("has_more") or not data:
+            return out
+        after = data[-1]["id"]
+        time.sleep(0.6)
+
+
+def get_broadcast(broadcast_id):
+    return _get("/broadcasts/" + broadcast_id)
 
 
 def verify(headers, body: bytes, tolerance=300):

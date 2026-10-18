@@ -31,6 +31,7 @@ try { const t = localStorage.getItem("xca_theme"); if (t === "light" || t === "d
 .theme-btn:hover { background: var(--surface-2); }
 :root[data-theme="dark"] { color-scheme: dark; } :root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
 .wrap { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
@@ -84,6 +85,16 @@ td.link a { color: var(--accent); text-decoration: none; }
 .copy { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
 .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
 .err { color: var(--bad); font-size: 12.5px; }
+.pickers { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 14px; }
+.pickers label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.pickers select { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; min-width: 200px; max-width: 460px; color: var(--text); }
+.pickers .chk { flex-direction: row; align-items: center; gap: 6px; font-size: 12.5px; padding-bottom: 8px; }
+#bcRows tr { cursor: pointer; }
+#bcRows tr:hover td { background: var(--surface-2); }
+#bcRows tr.sel td { background: var(--accent-soft); }
+.bchead { margin: 0 0 12px; }
+.bchead h2 { font-size: 18px; margin: 0; }
+.bchead .sub { margin: 2px 0 0; }
 </style>
 </head>
 <body>
@@ -99,12 +110,15 @@ td.link a { color: var(--accent); text-decoration: none; }
 
   <section class="card setup" id="setup"></section>
 
-  <div class="row" style="justify-content:space-between;margin-bottom:12px">
-    <div><h2 style="margin:0">Email analytics</h2><p class="sub" id="asof" style="margin:2px 0 0"></p></div>
-    <div class="row chips" id="period">
+  <div class="pickers">
+    <label>Sending domain<select id="domSel"></select></label>
+    <label>Broadcast<select id="bcSel"></select></label>
+    <div class="row chips" id="period" style="padding-bottom:2px">
       <button data-d="7">7 days</button><button data-d="30">30 days</button><button data-d="90">90 days</button><button data-d="">All time</button>
     </div>
+    <label class="chk" id="sysWrap"><input type="checkbox" id="sysChk"> include sign-in codes &amp; receipts</label>
   </div>
+  <div class="bchead"><h2 id="title">Email analytics</h2><p class="sub" id="asof"></p></div>
   <section class="kpis" id="kpis"></section>
 
   <section class="card">
@@ -114,6 +128,20 @@ td.link a { color: var(--accent); text-decoration: none; }
   </section>
 
   <section class="card">
+    <h2>Broadcasts</h2>
+    <p class="sub">Every broadcast sent from the chosen domain. Click one to see only its numbers. Emails are matched to a broadcast by subject + sender + send time (and by id from the webhook).</p>
+    <div class="table-wrap">
+      <table id="bcs">
+        <thead><tr>
+          <th class="l">Broadcast</th><th class="l">Sent</th><th>Emails</th><th>Delivered</th><th>Open rate</th><th>Click rate</th>
+          <th>Bounced</th><th>Spam</th><th>Signed up</th><th>API users</th>
+        </tr></thead>
+        <tbody id="bcRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="subjCard">
     <h2>By email (subject)</h2>
     <p class="sub">Each subject line counts as one campaign. <b>Signed up</b> = recipients who created an account after getting it; <b>API users</b> = of those, who made at least one API request.</p>
     <div class="table-wrap">
@@ -152,8 +180,10 @@ async function api(path, body) {
   if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
   return j;
 }
-let days = "30", D = null, chart = null;
-try { const s = localStorage.getItem("xca_email_days"); if (s !== null) days = s; } catch (e) {}
+let days = "30", domain = "", bc = "latest", sys = false, D = null, chart = null;
+const pref = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+               set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+days = pref.get("xca_email_days", days); domain = pref.get("xca_email_domain", ""); bc = pref.get("xca_email_bc", "latest");
 
 function renderSetup(S) {
   const done = S.api && S.webhook;
@@ -195,7 +225,32 @@ async function syncNow() {
   setTimeout(load, 4000);
 }
 
+const fmtDay = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
+function renderPickers() {
+  const doms = D.domains || [];
+  if (domain && !doms.some((d) => d.domain === domain)) doms.push({ domain, emails: 0 });
+  $("domSel").innerHTML = `<option value="">All domains</option>` + doms.map((d) =>
+    `<option value="${esc(d.domain)}" ${d.domain === domain ? "selected" : ""}>${esc(d.domain)} (${int(d.emails)})</option>`).join("");
+  const sentB = D.broadcasts.filter((b) => b.sent_at);
+  $("bcSel").innerHTML = `<option value="" ${!bc ? "selected" : ""}>All emails (not just broadcasts)</option>`
+    + sentB.map((b) => `<option value="${esc(b.id)}" ${b.id === D.broadcast ? "selected" : ""}>${esc(b.name || b.subject || "Untitled")} · ${fmtDay(b.sent_at)} · ${int(b.sent)} emails</option>`).join("");
+  $("period").hidden = !!D.broadcast;
+  $("sysWrap").hidden = !!D.broadcast;
+  $("sysChk").checked = sys;
+  $("subjCard").hidden = !!D.broadcast;
+}
 function render() {
+  renderPickers();
+  const B = D.broadcasts.find((b) => b.id === D.broadcast);
+  $("title").textContent = B ? (B.name || B.subject || "Broadcast") : `All emails${domain ? " from " + domain : ""}`;
+  $("bcRows").innerHTML = D.broadcasts.length ? D.broadcasts.map((b) => `<tr data-bc="${esc(b.id)}" class="${b.id === D.broadcast ? "sel" : ""}">
+      <td class="l subj" title="${esc(b.subject || "")}">${esc(b.name || "Untitled")}<small>${esc(b.subject || "")} · ${esc(b.domain || "")}</small></td>
+      <td class="l">${b.sent_at ? fmtDay(b.sent_at) : "<span style='color:var(--muted)'>not sent</span>"}</td>
+      <td>${int(b.sent)}</td><td>${pct(b.delivery_rate)}</td><td>${pct(b.open_rate)}</td><td>${pct(b.click_rate)}</td>
+      <td class="${b.bounce_rate > 4 ? "bad" : ""}">${pct(b.bounce_rate)}</td>
+      <td class="${b.complaint_rate > 0.1 ? "bad" : ""}">${b.complained ? int(b.complained) : "—"}</td>
+      <td>${b.signups ? int(b.signups) : "—"}</td><td>${b.signup_api ? int(b.signup_api) : "—"}</td></tr>`).join("")
+    : `<tr><td colspan="10" class="empty">${D.setup.api ? "No broadcasts yet — they appear after the next sync." : "Connect Resend above."}</td></tr>`;
   const T = D.totals;
   const k = (l, v, s = "", cls = "", vcls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v ${vcls}">${v}</div><div class="s">${s}</div></div>`;
   $("kpis").innerHTML = [
@@ -209,7 +264,10 @@ function render() {
     k("Signed up after", int(T.signups), `${pct(T.signup_rate)} of people emailed`, "hl"),
     k("…became API users", int(T.signup_api), T.signups ? `${pct(T.signup_api * 100 / T.signups)} of those signups` : ""),
   ].join("");
-  $("asof").textContent = `${D.setup.emails ? int(D.setup.emails) + " emails" : "No emails yet"} · ${days ? "last " + days + " days" : "all time"} · refreshes every minute`;
+  $("asof").textContent = B
+    ? `Sent ${fmtDay(B.sent_at)} from ${B.sender || B.domain} · subject “${B.subject || ""}” · ${int(T.recipients)} people`
+    : `${days ? "Last " + days + " days" : "All time"}${D.system_hidden ? ` · ${int(D.system_hidden)} sign-in / system emails hidden` : ""} · `
+      + `${int(D.setup.emails)} emails synced${D.setup.oldest ? " back to " + fmtDay(D.setup.oldest) : ""}${D.setup.backfill_done === false ? " (still pulling older history)" : ""}`;
   document.querySelectorAll("#period button").forEach((b) => b.classList.toggle("on", b.dataset.d === days));
 
   const best = (f) => Math.max(...D.campaigns.filter((c) => c.sent >= 20 && ok(c[f])).map((c) => c[f]));
@@ -246,6 +304,13 @@ function drawChart() {
     scales: { x: { grid: { display: false } }, y: { beginAtZero: true, grid: { color: grid } } } } });
 }
 window.addEventListener("xca-theme", () => { if (chart) { chart.destroy(); chart = null; } if (D) drawChart(); });
+$("domSel").addEventListener("change", () => { domain = $("domSel").value; pref.set("xca_email_domain", domain); bc = "latest"; pref.set("xca_email_bc", bc); load(); });
+$("bcSel").addEventListener("change", () => { bc = $("bcSel").value; pref.set("xca_email_bc", bc); load(); });
+$("sysChk").addEventListener("change", () => { sys = $("sysChk").checked; load(); });
+$("bcRows").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-bc]"); if (!tr) return;
+  bc = tr.dataset.bc; pref.set("xca_email_bc", bc); load(); window.scrollTo({ top: 0, behavior: "smooth" });
+});
 $("period").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-d]"); if (!b) return;
   days = b.dataset.d; try { localStorage.setItem("xca_email_days", days); } catch (err) {}
@@ -254,7 +319,11 @@ $("period").addEventListener("click", (e) => {
 let timer;
 async function load() {
   clearTimeout(timer);
-  try { D = await api("/api/email" + (days ? "?days=" + days : "")); renderSetup(D.setup); render(); } catch (e) { /* keep last render */ }
+  const q = new URLSearchParams();
+  if (bc) q.set("broadcast", bc); else if (days) q.set("days", days);
+  if (domain) q.set("sender", domain);
+  if (sys) q.set("system", "1");
+  try { D = await api("/api/email?" + q); renderSetup(D.setup); render(); } catch (e) { /* keep last render */ }
   timer = setTimeout(load, D?.setup?.syncing ? 4000 : 60000);
 }
 api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});

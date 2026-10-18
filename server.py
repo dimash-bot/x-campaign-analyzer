@@ -117,6 +117,10 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS email_events (
             svix_id TEXT PRIMARY KEY, type TEXT, email_id TEXT, recipient TEXT, subject TEXT, link TEXT, at TEXT)""")
         c.execute("CREATE INDEX IF NOT EXISTS email_events_email ON email_events(email_id)")
+        c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")   # small persistent flags
+        add_col("emails", "broadcast_id", "TEXT")    # from webhook events (API-synced emails are matched by subject + time)
+        c.execute("""CREATE TABLE IF NOT EXISTS broadcasts (
+            id TEXT PRIMARY KEY, name TEXT, subject TEXT, sender TEXT, status TEXT, created_at TEXT, sent_at TEXT, synced_at TEXT)""")
         add_col("plans", "campaign_id", "INTEGER")   # set once the plan was sent to Waves
         add_col("campaigns", "other_spend", "REAL DEFAULT 0")
         add_col("campaigns", "other_note", "TEXT")
@@ -1295,14 +1299,30 @@ def sync_resend():
 
         def stop(page):
             return all(e["id"] in known for e in page) and (norm_ts(page[-1].get("created_at")) or "") < week_ago
-        items = resend_client.list_emails(stop_after_known=stop if known else None)
+        items, more = resend_client.list_emails(stop_after_known=stop if known else None)
+        with db() as c:
+            done = (c.execute("SELECT v FROM kv WHERE k='resend_backfill_done'").fetchone() or [None])[0]
+            oldest = c.execute("SELECT id FROM emails ORDER BY created_at LIMIT 1").fetchone()
+        if not known and not more:
+            done = "1"
+        elif not done and (oldest or (items and more)):
+            # history is bigger than one sync: keep walking back from the oldest email we have, a batch per sync
+            start = items[-1]["id"] if not known and items else oldest[0]
+            older, more_old = resend_client.list_emails(after=start)
+            items += older
+            if not more_old:
+                done = "1"
+        _resend["backfill_done"] = bool(done)
         with _db_lock, db() as c:
+            if done:
+                c.execute("INSERT OR REPLACE INTO kv(k, v) VALUES ('resend_backfill_done', '1')")
             for e in items:
                 c.execute("""INSERT INTO emails(id, recipient, sender, subject, created_at, last_event, synced_at) VALUES (?,?,?,?,?,?,?)
                              ON CONFLICT(id) DO UPDATE SET last_event=excluded.last_event, subject=excluded.subject,
                              recipient=COALESCE(excluded.recipient, emails.recipient), synced_at=excluded.synced_at""",
                           (e["id"], _recipient(e.get("to")), e.get("from"), e.get("subject"), norm_ts(e.get("created_at")),
                            e.get("last_event"), now()))
+        sync_broadcasts()
         _resend.update(last_sync=now(), error=None, pulled=len(items))
     except Exception as ex:  # noqa: BLE001 — shown on the Email page
         print(f"resend sync failed: {ex}", flush=True)
@@ -1312,11 +1332,31 @@ def sync_resend():
     return _resend
 
 
+def sync_broadcasts():
+    """Broadcast list + each one's subject / sender / send time (fetched once, again only while not yet sent)."""
+    with db() as c:
+        have = {r[0]: (r[1], r[2]) for r in c.execute("SELECT id, status, subject FROM broadcasts")}
+    for b in resend_client.list_broadcasts():
+        st = b.get("status")
+        if b["id"] in have and have[b["id"]][0] == st and have[b["id"]][1] is not None:
+            continue
+        full = resend_client.get_broadcast(b["id"])
+        time.sleep(0.6)
+        with _db_lock, db() as c:
+            c.execute("""INSERT OR REPLACE INTO broadcasts(id, name, subject, sender, status, created_at, sent_at, synced_at)
+                         VALUES (?,?,?,?,?,?,?,?)""",
+                      (b["id"], full.get("name") or b.get("name"), full.get("subject"), full.get("from"), full.get("status") or st,
+                       norm_ts(full.get("created_at") or b.get("created_at")), norm_ts(full.get("sent_at") or b.get("sent_at")), now()))
+
+
 def resend_worker():
     while True:
         if resend_client.api_enabled():
             sync_resend()
-        time.sleep(RESEND_SYNC_MIN * 60)
+            # still pulling old history: come back soon instead of in 30 minutes
+            time.sleep(90 if not _resend.get("backfill_done") and not _resend.get("error") else RESEND_SYNC_MIN * 60)
+        else:
+            time.sleep(RESEND_SYNC_MIN * 60)
 
 
 TERMINAL_EVENTS = {"bounced", "complained", "failed", "suppressed"}
@@ -1335,10 +1375,12 @@ def record_email_event(headers, body):
     with _db_lock, db() as c:
         c.execute("INSERT OR IGNORE INTO email_events(svix_id, type, email_id, recipient, subject, link, at) VALUES (?,?,?,?,?,?,?)",
                   (headers.get("svix-id"), typ, d["email_id"], rcpt, d.get("subject"), link, at))
+        if d.get("broadcast_id"):
+            c.execute("UPDATE emails SET broadcast_id=? WHERE id=?", (d["broadcast_id"], d["email_id"]))
         row = c.execute("SELECT last_event FROM emails WHERE id=?", (d["email_id"],)).fetchone()
         if not row:
-            c.execute("INSERT INTO emails(id, recipient, sender, subject, created_at, last_event) VALUES (?,?,?,?,?,?)",
-                      (d["email_id"], rcpt, d.get("from"), d.get("subject"), norm_ts(d.get("created_at")) or at, typ))
+            c.execute("INSERT INTO emails(id, recipient, sender, subject, created_at, last_event, broadcast_id) VALUES (?,?,?,?,?,?,?)",
+                      (d["email_id"], rcpt, d.get("from"), d.get("subject"), norm_ts(d.get("created_at")) or at, typ, d.get("broadcast_id")))
         else:
             cur = row[0] or ""
             if (typ in TERMINAL_EVENTS and cur != "complained") or \
@@ -1347,18 +1389,73 @@ def record_email_event(headers, body):
     return {"ok": True, "type": typ}
 
 
-def email_view(days=None):
-    """Totals, per-subject campaigns, per-day sends and top links. Recipients are matched to our signups:
-    'signed up' = became a user after the email, 'API users' = of those, made at least one API request."""
+# Sign-in codes, verification, receipts…: sent to everyone, so they swamp marketing rates. Hidden by default.
+SYSTEM_EMAIL_RE = re.compile(r"sign[- ]?in code|log[- ]?in code|verif|confirm your|password|reset|magic link|one[- ]time|\botp\b|"
+                             r"\bcode\b.*\d|invoice|receipt|payment (?:received|failed)|security alert", re.I)
+
+
+def sender_key(s):
+    """'Drex <hi@drex.ai>' → 'hi@drex.ai'."""
+    m = re.search(r"<([^>]+)>", s or "")
+    return (m.group(1) if m else (s or "")).strip().lower() or "(unknown)"
+
+
+def sender_domain(s):
+    return sender_key(s).rsplit("@", 1)[-1]
+
+
+def sender_match(s, want):
+    """`want` = an address (hi@drex.ai) or a whole sending domain (drex.ai)."""
+    if not want:
+        return True
+    want = want.strip().lower()
+    return sender_key(s) == want if "@" in want else sender_domain(s) == want
+
+
+def _dt(v):
+    try:
+        return datetime.fromisoformat(v) if v else None
+    except ValueError:
+        return None
+
+
+def map_broadcasts(c, emails):
+    """email id → broadcast id. Webhook events carry it; otherwise an email belongs to the broadcast with the same
+    subject (+ sender) that went out just before it (within 3 days)."""
+    bcs = [dict(r) for r in c.execute("SELECT * FROM broadcasts WHERE sent_at IS NOT NULL ORDER BY sent_at")]
+    by_subj = collections.defaultdict(list)
+    for b in bcs:
+        b["_t"] = _dt(b["sent_at"])
+        by_subj[(b["subject"] or "").strip().lower()].append(b)
+    out = {}
+    for e in emails:
+        if e.get("broadcast_id"):
+            out[e["id"]] = e["broadcast_id"]
+            continue
+        t, best = _dt(e["created_at"]), None
+        for b in by_subj.get((e["subject"] or "").strip().lower(), ()):
+            if t and b["_t"] and b["_t"] - timedelta(minutes=10) <= t <= b["_t"] + timedelta(days=3) and \
+                    (not b["sender"] or sender_key(b["sender"]) == sender_key(e["sender"])):
+                best = b
+        if best:
+            out[e["id"]] = best["id"]
+    return bcs, out
+
+
+def email_view(days=None, sender=None, include_system=False, broadcast=None):
+    """Broadcast-first email analytics. With `broadcast` (id or 'latest'): only that broadcast's emails.
+    Otherwise all emails in the period (sign-in codes / receipts hidden unless include_system).
+    Recipients are matched to our signups: 'signed up' = became a user after the email, 'API users' = of those,
+    made at least one API request."""
     dv = lambda a, b: round(a * 100 / b, 1) if b else None  # noqa: E731
     since = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat() if days else ""
     with db() as c:
-        emails = [dict(r) for r in c.execute("SELECT * FROM emails WHERE COALESCE(created_at,'') >= ? ORDER BY created_at", (since,))]
+        everything = [dict(r) for r in c.execute("SELECT * FROM emails ORDER BY created_at")]
+        bcs, bmap = map_broadcasts(c, everything)
         ev = {}
         for r in c.execute("SELECT email_id, type FROM email_events"):
             ev.setdefault(r[0], set()).add(r[1])
-        links = [dict(r) for r in c.execute("""SELECT link, count(*) AS clicks, count(DISTINCT recipient) AS people
-                 FROM email_events WHERE type='clicked' AND link IS NOT NULL AND at >= ? GROUP BY link ORDER BY clicks DESC LIMIT 15""", (since,))]
+        clicks = [tuple(r) for r in c.execute("SELECT email_id, link, recipient FROM email_events WHERE type='clicked' AND link IS NOT NULL")]
         users = {r[0]: (r[1], r[2]) for r in c.execute("SELECT email, signed_up, requests_all FROM users")}
         n_events = c.execute("SELECT count(*) FROM email_events").fetchone()[0]
         last_hook = c.execute("SELECT max(at) FROM email_events").fetchone()[0]
@@ -1395,18 +1492,46 @@ def email_view(days=None):
                 "bounce_rate": dv(t["bounced"], t["sent"]), "complaint_rate": dv(t["complained"], t["delivered"]),
                 "signup_rate": dv(t["signups"], t["recipients"])}
 
-    by_subject = collections.defaultdict(list)
-    by_day = collections.defaultdict(list)
+    per_bc = collections.defaultdict(list)
+    for e in everything:
+        if e["id"] in bmap:
+            per_bc[bmap[e["id"]]].append(e)
+    domains = collections.Counter(sender_domain(e["sender"]) for e in everything if not SYSTEM_EMAIL_RE.search(e["subject"] or ""))
+    broadcasts = [{"id": b["id"], "name": b["name"], "subject": b["subject"], "sender": b["sender"], "sent_at": b["sent_at"],
+                   "domain": sender_domain(b["sender"]), **summary(per_bc.get(b["id"], []))}
+                  for b in reversed(bcs) if sender_match(b["sender"], sender)]          # newest first
+    if broadcast == "latest":
+        broadcast = next((b["id"] for b in broadcasts if b["sent"]), None)
+    if broadcast:
+        emails = per_bc.get(broadcast, [])
+    else:
+        emails = [e for e in everything if (e["created_at"] or "") >= since
+                  and sender_match(e["sender"], sender)
+                  and (include_system or not SYSTEM_EMAIL_RE.search(e["subject"] or ""))]
+
+    ids = {e["id"] for e in emails}
+    lc = collections.defaultdict(lambda: [0, set()])
+    for eid, link, rcpt in clicks:
+        if eid in ids:
+            lc[link][0] += 1
+            lc[link][1].add(rcpt)
+    links = sorted(({"link": k, "clicks": v[0], "people": len(v[1])} for k, v in lc.items()), key=lambda x: -x["clicks"])[:15]
+    by_subject, by_day = collections.defaultdict(list), collections.defaultdict(list)
     for e in emails:
         by_subject[(e["subject"] or "(no subject)").strip()].append(e)
         by_day[(e["created_at"] or "")[:10]].append(e)
     campaigns = sorted(({"subject": k, "first": v[0]["created_at"], "last": v[-1]["created_at"], **summary(v)}
                         for k, v in by_subject.items()), key=lambda r: r["last"] or "", reverse=True)
-    days_out = [{"day": k, **summary(v)} for k, v in sorted(by_day.items()) if k]
-    return {"totals": summary(emails), "campaigns": campaigns, "days": days_out, "links": links,
+    return {"totals": summary(emails), "broadcast": broadcast, "broadcasts": broadcasts, "campaigns": campaigns,
+            "domains": [{"domain": k, "emails": v} for k, v in domains.most_common()], "system_hidden": 0 if include_system or broadcast
+            else sum(1 for e in everything if (e["created_at"] or "") >= since and sender_match(e["sender"], sender)
+                     and SYSTEM_EMAIL_RE.search(e["subject"] or "")),
+            "days": [{"day": k, **summary(v)} for k, v in sorted(by_day.items()) if k], "links": links,
             "setup": {"api": resend_client.api_enabled(), "webhook": resend_client.webhook_enabled(),
                       "webhook_url": (PUBLIC_URL or "") + "/webhooks/resend", "last_sync": _resend["last_sync"],
-                      "sync_error": _resend["error"], "syncing": _resend["running"], "emails": len(emails),
+                      "sync_error": _resend["error"], "syncing": _resend["running"], "emails": len(everything),
+                      "oldest": everything[0]["created_at"] if everything else None,
+                      "backfill_done": _resend.get("backfill_done"), "broadcasts": len(bcs),
                       "events": n_events, "last_webhook": last_hook}}
 
 
@@ -1875,7 +2000,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/html; charset=utf-8")
         if u.path == "/api/email":
             d = q.get("days", [""])[0]
-            return self._send(200, email_view(int(d) if d.isdigit() else None))
+            return self._send(200, email_view(int(d) if d.isdigit() else None, q.get("sender", [""])[0] or None,
+                                              q.get("system", ["0"])[0] == "1", q.get("broadcast", [""])[0] or None))
         if u.path == "/api/agencies":
             return self._send(200, agencies_view())
         if u.path == "/builder":

@@ -140,7 +140,10 @@ TOOLS = [
      "description": "Resend email analytics: sent, delivery / open / click / bounce / spam rates, per-subject campaigns, "
                     "top clicked links, and how many recipients signed up afterwards (and became API users).",
      "inputSchema": {"type": "object", "properties": {
-         "days": {"type": "integer", "description": "only emails from the last N days (default: all time)"}}}},
+         "days": {"type": "integer", "description": "only emails from the last N days (default: all time)"},
+         "sender": {"type": "string", "description": "only emails from this address (hi@drex.ai) or whole sending domain (drex.ai)"},
+         "include_system": {"type": "boolean", "description": "include sign-in codes / verification / receipts (default false)"},
+         "broadcast": {"type": "string", "description": "a Resend broadcast id, or 'latest' — only that broadcast's emails"}}}},
     {"name": "reanalyze_creators",
      "description": "Re-analyze several X influencers at once: fresh profile, their recent posts (median views / ER) and the "
                     "bot-follower check. Runs in the background (~$0.05 Apify per account); read results with get_creators later.",
@@ -233,7 +236,7 @@ def call_tool(app, user, name, args):
         email = user if isinstance(user, str) else (user or {}).get("email")
         return app.set_outreached(keys, args.get("outreached", True), email, args.get("sender"))
     if name == "get_email_analytics":
-        return app.email_view(args.get("days"))
+        return app.email_view(args.get("days"), args.get("sender"), bool(args.get("include_system")), args.get("broadcast"))
     if name == "reanalyze_creators":
         return app.reanalyze_creators([app.creator_key("x", str(h).lstrip("@")) for h in args.get("creators") or []])
     if name == "set_paid_status":
