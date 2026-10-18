@@ -46,6 +46,7 @@ button:hover { background: var(--surface-2); }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 button.primary:hover { filter: brightness(1.08); }
 button.ghost { border-color: transparent; background: transparent; color: var(--muted); padding: 4px 8px; }
+button.ghost.tiny { padding: 0 4px; font-size: 12px; }
 button.ghost:hover { color: var(--bad); }
 button:disabled { opacity: .55; cursor: progress; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
@@ -174,7 +175,7 @@ td input.note { width: 170px; text-align: left; }
 
   <section class="card">
     <h2>1 · Add post links</h2>
-    <textarea id="urls" placeholder="Paste links, one per line — or rows straight from your payment sheet:&#10;$600.00&#9;paid with paypal&#9;https://x.com/someone/status/1234567890&#10;https://x.com/another/status/9876543210"></textarea>
+    <textarea id="urls" placeholder="Paste links, one per line — or rows straight from your payment sheet:&#10;$600.00&#9;paid with paypal&#9;https://x.com/someone/status/1234567890&#10;https://x.com/another/status/9876543210&#10;https://www.youtube.com/watch?v=…  ·  https://t.me/channel/123  ·  any post link"></textarea>
     <div class="row" style="margin-top:8px">
       <label class="muted" for="batchBudget">Default cost per post ($)</label>
       <input id="batchBudget" type="number" min="0" step="0.01" placeholder="0" style="width:110px">
@@ -182,7 +183,8 @@ td input.note { width: 170px; text-align: left; }
       <button id="refreshAll">↻ Refresh all metrics</button>
       <span id="status" class="muted"></span>
     </div>
-    <div class="hint">Sheet rows (amount · note · link) are parsed automatically; one amount covering several links is split evenly. Re-pasting a post updates its cost.</div>
+    <div class="hint">Links from <b>any platform</b> work — X and LinkedIn fetch their numbers; YouTube, TikTok, Telegram, Reddit, blogs, anything else: type views / likes into the row.
+      Sheet rows (amount · note · link) are parsed automatically; one amount covering several links is split evenly. Re-pasting a post updates its cost.</div>
     <div class="other">
       <label class="muted" for="otherSpend">Other spend, not a post ($)</label>
       <input id="otherSpend" type="number" min="0" step="0.01" placeholder="0" style="width:110px">
@@ -489,7 +491,7 @@ function render() {
     const e = eng(p);
     return `<tr class="${picked.has(p.id) ? "picked" : ""}${p.excluded ? " excluded" : ""}">
       <td class="rank l"><label><input type="checkbox" data-sel="${p.id}" ${picked.has(p.id) ? "checked" : ""}>${i + 1}</label></td>
-      <td class="post-cell l"><span class="badge">${PLAT[p.platform || "x"]}</span>${p.agency_id ? `<span class="badge agency" title="Bought through this agency">${esc((S.agencies || []).find((a) => a.id === p.agency_id)?.name || "agency")}</span>` : ""}<a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || "…")}</a>${p.excluded ? `<span class="excl-tag" title="Not counted in any total">excluded</span>` : ""}
+      <td class="post-cell l"><span class="badge" title="${esc(p.url)}">${esc(platName(p))}</span>${p.agency_id ? `<span class="badge agency" title="Bought through this agency">${esc((S.agencies || []).find((a) => a.id === p.agency_id)?.name || "agency")}</span>` : ""}<a href="${esc(p.url)}" target="_blank" rel="noopener">${(p.platform || "x") === "x" ? "@" : ""}${esc(p.author || ((p.platform || "x") === "x" ? "…" : "set author"))}</a>${(p.platform || "x") !== "x" ? `<button class="ghost tiny" title="Who posted it (their name or handle) — links the post to Influencers" data-author="${p.id}">✎</button>` : ""}${p.excluded ? `<span class="excl-tag" title="Not counted in any total">excluded</span>` : ""}
         <div class="t" title="${esc(p.text)}">${esc((p.text || "").slice(0, 70))}</div>
         ${S.pending.includes(p.id) ? `<div class="fetching">⟳ fetching metrics…</div>` : p.fetch_error ? `<div class="err">⚠ ${esc(p.fetch_error)}</div>` : ""}</td>
       <td class="l"><input class="note" value="${esc(p.note || "")}" data-post="${p.id}" data-f="note" placeholder="payment note"></td>
@@ -531,8 +533,20 @@ function render() {
 const X_RE = /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:x|twitter)\.com\/\w+\/status\/\d+[^\s"]*/g;
 const X_ANY_RE = /(?:https?:\/\/)?(?:www\.)?(?:x|twitter)\.com\/\S*/g;
 // Post links on other platforms (profile links like linkedin.com/in/... are not posts). Mirrors platforms.py.
-const OTHER_POST_RE = /(?:https?:\/\/)?(?:www\.|m\.)?(?:linkedin\.com\/(?:posts|feed\/update|pulse)\/|lnkd\.in\/|youtube\.com\/(?:watch|shorts\/)|youtu\.be\/|tiktok\.com\/@[^\/\s]+\/video\/|instagram\.com\/(?:p|reel)\/|reddit\.com\/r\/[^\/\s]+\/comments\/|threads\.(?:net|com)\/@[^\/\s]+\/post\/|bsky\.app\/profile\/[^\/\s]+\/post\/)[^\s"]*/gi;
 const PROFILE_RE = /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/(?:in|company)\/[^\s"]*/gi;
+// A post link on any other site: needs a path, and isn't X, a LinkedIn profile, or a payment / docs / scheduling link
+const ANY_POST_RE = /(?<![\w.\/@-])(?:https?:\/\/)?(?:www\.|m\.)?(?!(?:[\w-]+\.)*(?:x|twitter)\.com\b)(?!(?:[\w-]+\.)*linkedin\.com\/(?:in|company)\/)(?!(?:[\w-]+\.)*(?:paypal|wise|stripe|revolut|calendly|zoom)\.)(?!(?:[\w-]+\.)*(?:docs|drive|sheets|meet)\.google\.)(?!(?:[\w-]+\.)*cal\.com\b)[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\/[^\s"<>]+/gi;
+const SITES = [["youtube.com", "YouTube"], ["youtu.be", "YouTube"], ["tiktok.com", "TikTok"], ["instagram.com", "Instagram"], ["reddit.com", "Reddit"],
+  ["threads.net", "Threads"], ["threads.com", "Threads"], ["bsky.app", "Bluesky"], ["news.ycombinator.com", "Hacker News"], ["producthunt.com", "Product Hunt"],
+  ["medium.com", "Medium"], ["substack.com", "Substack"], ["t.me", "Telegram"], ["telegram.me", "Telegram"], ["facebook.com", "Facebook"], ["fb.watch", "Facebook"],
+  ["discord.com", "Discord"], ["discord.gg", "Discord"], ["dev.to", "DEV"], ["hashnode.dev", "Hashnode"], ["github.com", "GitHub"], ["twitch.tv", "Twitch"],
+  ["quora.com", "Quora"], ["vk.com", "VK"], ["bilibili.com", "Bilibili"], ["habr.com", "Habr"], ["warpcast.com", "Farcaster"], ["linkedin.com", "LinkedIn"], ["lnkd.in", "LinkedIn"]];
+function siteName(url) {
+  let h = ""; try { h = new URL(url.startsWith("http") ? url : "https://" + url).hostname.replace(/^(www|m)\./, ""); } catch (e) {}
+  const hit = SITES.find(([d]) => h === d || h.endsWith("." + d));
+  return hit ? hit[1] : h || "Other";
+}
+const platName = (p) => (p.platform || "x") === "other" ? siteName(p.url) : PLAT[p.platform || "x"];
 function parsePaste(text, defaultBudget) {
   const rows = [];
   for (const line of text.split(/\r?\n/)) {
@@ -542,7 +556,7 @@ function parsePaste(text, defaultBudget) {
   }
   // A line holding only post link(s) belongs to the row above when that row has a price but no post link yet
   // (sheets where the link cell wrapped onto its own line).
-  const isPost = (t) => new RegExp(X_RE.source, "i").test(t) || new RegExp(OTHER_POST_RE.source, "i").test(t);
+  const isPost = (t) => new RegExp(X_RE.source, "i").test(t) || new RegExp(ANY_POST_RE.source, "i").test(t);
   for (let i = rows.length - 1; i > 0; i--) {
     const linkOnly = !rows[i].includes("\t") && !/\$\s*\d/.test(rows[i]) && isPost(rows[i]);
     if (linkOnly && /\$\s*\d/.test(rows[i - 1]) && !isPost(rows[i - 1])) { rows[i - 1] += "\t" + rows[i]; rows.splice(i, 1); }
@@ -551,13 +565,13 @@ function parsePaste(text, defaultBudget) {
   for (const raw of rows) {
     const byId = new Map();
     for (const u of raw.match(X_RE) || []) byId.set(u.match(/status\/(\d+)/)[1], u);
-    for (const u of raw.match(OTHER_POST_RE) || []) byId.set(u.replace(/^https?:\/\/(www\.)?/, "").split("?")[0].toLowerCase(), u);
+    for (const u of raw.match(ANY_POST_RE) || []) byId.set(u.replace(/^https?:\/\/(www\.|m\.)?/, "").replace(/[).,;]+$/, "").toLowerCase(), u.replace(/[).,;]+$/, ""));
     const xs = [...byId.values()];   // every post link in the row, any platform
     const amt = raw.match(/\$\s*([\d,]+(?:\.\d+)?)/);
     const budget = amt ? parseFloat(amt[1].replace(/,/g, "")) : defaultBudget;
 
     const note = raw.split("\t")
-      .map((c) => c.replace(/"/g, " ").replace(X_ANY_RE, " ").replace(OTHER_POST_RE, " ").replace(PROFILE_RE, " ").replace(/\$\s*[\d,]+(?:\.\d+)?/, " ")
+      .map((c) => c.replace(/"/g, " ").replace(X_ANY_RE, " ").replace(ANY_POST_RE, " ").replace(PROFILE_RE, " ").replace(/\$\s*[\d,]+(?:\.\d+)?/, " ")
         .replace(/(^|\s)\d+[.)](?=\s|$|h)/g, " ").replace(/\s+/g, " ").trim())
       .filter((c) => c && !/^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?$/i.test(c))       // posting date: fetched from the post
       .map((c) => (c === "TRUE" ? "✓" : c === "FALSE" ? "✗" : c))
@@ -644,6 +658,12 @@ document.addEventListener("change", async (ev) => {
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest("button"); if (!b) return;
   if (b.dataset.delPost && await askConfirm("Remove this post from the campaign?", "Remove")) { await api("/api/posts/delete", { id: Number(b.dataset.delPost) }); load(); }
+  if (b.dataset.author) {
+    const p = S.posts.find((x) => x.id === Number(b.dataset.author));
+    const v = await ask(`Who posted this ${platName(p)} post? (name or handle)`, { input: true, value: p.author || "", ok: "Save", emptyOk: true });
+    if (v !== null) { await api("/api/posts/update", { id: p.id, author: v }); load(); }
+    return;
+  }
   if (b.dataset.excl) {
     const p = S.posts.find((x) => x.id === Number(b.dataset.excl));
     await api("/api/posts/update", { id: p.id, excluded: !p.excluded });

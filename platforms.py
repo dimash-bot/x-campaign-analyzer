@@ -3,7 +3,8 @@
   X         -> x_client (exact views, likes, reposts, quotes, replies, bookmarks)
   LinkedIn  -> public post page's JSON-LD: reactions, comments, post time. Impressions aren't public,
                so they're entered by hand (from the creator's analytics screenshot).
-  other     -> recognised post links (YouTube, TikTok, Instagram, Reddit, Threads...): everything manual.
+  other     -> a link from any other site (YouTube, TikTok, Instagram, Reddit, Telegram, a blog...): metrics typed
+               in by hand; the author is guessed from the URL where it carries one, and can be edited.
 
 Each post gets a stable `key` (stored in posts.tweet_id for historical reasons): the tweet id for X,
 "li:<activity id>" for LinkedIn, "url:<normalised url>" otherwise.
@@ -24,6 +25,57 @@ OTHER_POST = re.compile(
     r"(?:youtube\.com/(?:watch|shorts/)|youtu\.be/|tiktok\.com/@[^/]+/video/|instagram\.com/(?:p|reel)/|"
     r"reddit\.com/r/[^/]+/comments/|threads\.(?:net|com)/@[^/]+/post/|bsky\.app/profile/[^/]+/post/|"
     r"news\.ycombinator\.com/item|producthunt\.com/posts/|medium\.com/.+/.+|substack\.com/p/)", re.I)
+
+# Links that are never a post: payments, docs, scheduling (they show up in payment sheets next to the post link)
+NOT_POST_HOST = re.compile(r"(?:^|\.)(?:paypal\.(?:com|me)|wise\.com|stripe\.com|revolut\.(?:com|me)|calendly\.com|zoom\.us|"
+                           r"docs\.google\.com|drive\.google\.com|sheets\.google\.com|meet\.google\.com|cal\.com)$", re.I)
+URL_RE = re.compile(r"^https?://([a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,})(?::\d+)?(/\S*)?$", re.I)
+
+SITE_NAMES = [("youtube.com", "YouTube"), ("youtu.be", "YouTube"), ("tiktok.com", "TikTok"), ("instagram.com", "Instagram"),
+              ("reddit.com", "Reddit"), ("threads.net", "Threads"), ("threads.com", "Threads"), ("bsky.app", "Bluesky"),
+              ("news.ycombinator.com", "Hacker News"), ("producthunt.com", "Product Hunt"), ("medium.com", "Medium"),
+              ("substack.com", "Substack"), ("t.me", "Telegram"), ("telegram.me", "Telegram"), ("facebook.com", "Facebook"),
+              ("fb.watch", "Facebook"), ("discord.com", "Discord"), ("discord.gg", "Discord"), ("dev.to", "DEV"),
+              ("hashnode.dev", "Hashnode"), ("github.com", "GitHub"), ("twitch.tv", "Twitch"), ("kick.com", "Kick"),
+              ("quora.com", "Quora"), ("pinterest.com", "Pinterest"), ("vk.com", "VK"), ("bilibili.com", "Bilibili"),
+              ("weibo.com", "Weibo"), ("zhihu.com", "Zhihu"), ("xiaohongshu.com", "Xiaohongshu"), ("habr.com", "Habr"),
+              ("mastodon.social", "Mastodon"), ("warpcast.com", "Farcaster"), ("snapchat.com", "Snapchat"),
+              ("spotify.com", "Spotify"), ("podcasts.apple.com", "Apple Podcasts"), ("discourse", "Forum")]
+
+
+def host_of(url):
+    m = URL_RE.match(url if re.match(r"https?://", url) else "https://" + url)
+    return m.group(1).lower().removeprefix("www.").removeprefix("m.") if m else ""
+
+
+def site_name(url):
+    """'YouTube', 'Telegram'… or the bare domain for sites we don't know."""
+    h = host_of(url)
+    for dom, name in SITE_NAMES:
+        if h == dom or h.endswith("." + dom):
+            return name
+    return h or "Other"
+
+
+def author_from_url(url):
+    """The account a post belongs to, when the link spells it out (best effort, editable later)."""
+    h, path = host_of(url), re.sub(r"^https?://[^/]+", "", url.split("?")[0])
+    pats = [(r"tiktok\.com|threads\.|medium\.com|youtube\.com", r"^/@([\w.\-]+)"),
+            (r"bsky\.app", r"^/profile/([\w.\-]+)"), (r"^t\.me$|telegram\.me", r"^/(?:s/)?([\w]+)/\d"),
+            (r"reddit\.com", r"^/(?:u|user)/([\w\-]+)"), (r"dev\.to|github\.com|habr\.com|warpcast\.com", r"^/([\w\-]+)/")]
+    for host_re, path_re in pats:
+        if re.search(host_re, h):
+            m = re.search(path_re, path)
+            if m:
+                return m.group(1)
+    m = re.match(r"^([\w\-]+)\.(?:substack\.com|hashnode\.dev|medium\.com)$", h)
+    if m and m.group(1) not in ("www", "open"):
+        return m.group(1)
+    if re.search(r"reddit\.com", h):
+        m = re.search(r"^/r/([\w\-]+)/", path)
+        return "r/" + m.group(1) if m else ""
+    return ""
+
 
 # Which metric columns each platform fills automatically (the rest are typed in)
 AUTO_METRICS = {
@@ -49,7 +101,20 @@ def detect(url: str):
         return "linkedin", f"li:{m.group(1)}" if m else "url:" + _norm(full), full.split("?")[0]
     if OTHER_POST.search(full):
         return "other", "url:" + _norm(full), full
-    return None
+    host = host_of(full)
+    if not host or re.search(r"(?:^|\.)(?:x|twitter)\.com$|(?:^|\.)linkedin\.com$", host) or NOT_POST_HOST.search(host):
+        return None   # X / LinkedIn profiles aren't posts; payment and doc links aren't either
+    if not (URL_RE.match(full).group(2) or "").strip("/"):
+        return None   # a bare homepage isn't a post
+    return "other", "url:" + _norm_any(full), full
+
+
+def _norm_any(url):
+    """Like _norm, but for unknown sites keep every query param except tracking ones (forums use ?t=123 etc.)."""
+    base, _, query = url.split("#")[0].partition("?")
+    keep = sorted(q for q in query.split("&") if q and not re.match(r"(?:utm_\w+|ref|ref_src|fbclid|gclid|si|s|igsh|share_id)=", q, re.I))
+    base = re.sub(r"^https?://(www\.|m\.)?", "", base).rstrip("/").lower()
+    return base + ("?" + "&".join(keep) if keep else "")
 
 
 def _resolve(url):

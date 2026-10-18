@@ -2420,6 +2420,9 @@ class Handler(BaseHTTPRequestHandler):
                         skipped += 1
                         continue
                     added += 1
+                    if plat == "other":   # no fetcher: name the post's account from the link when it carries one
+                        c.execute("UPDATE posts SET author=COALESCE(NULLIF(?, ''), author) WHERE id=?",
+                                  (platforms.author_from_url(url), cur.lastrowid))
                     to_fetch.append({"id": cur.lastrowid, "tweet_id": key, "platform": plat, "url": url})
                 result = {"added": added, "skipped": skipped, "invalid": invalid}
 
@@ -2428,6 +2431,9 @@ class Handler(BaseHTTPRequestHandler):
                 typed = [k for k in METRICS if k not in platforms.AUTO_METRICS[(row["platform"] if row else None) or "x"]]
                 if "excluded" in b:
                     b["excluded"] = 1 if b["excluded"] else 0
+                if "author" in b and (row["platform"] if row else "x") not in ("x", None):
+                    typed = [*typed, "author"]   # X / LinkedIn authors come from the post itself
+                    b["author"] = (b["author"] or "").strip().lstrip("@")[:80] or None
                 fields = {k: b[k] for k in ("budget", "day", "note", "excluded", *typed) if k in b}
                 if fields:
                     c.execute(f"UPDATE posts SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?",
