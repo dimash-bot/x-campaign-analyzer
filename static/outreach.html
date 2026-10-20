@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DM Outreach</title>
+<script>
+try { const t = localStorage.getItem("xca_theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee; --border: #e3e3de;
+  --text: #1a1a18; --muted: #6b6b66; --accent: #1d6fe0; --accent-ink: #fff; --accent-soft: #e8f0fc;
+  --good: #16794a; --bad: #b42318; --warn: #a15c00; --warn-bg: #fff6e6; --warn-border: #f0d9a8;
+  --good-bg: #e7f5ee; --bad-bg: #fdeceb; --violet: #5b4bc4; --violet-bg: #efedfc;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
+    --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a; --accent-soft: #1c2a40;
+    --good: #4cc38a; --bad: #ff7a6b; --warn: #f0b456; --warn-bg: #2e2412; --warn-border: #5a4520;
+    --good-bg: #15291f; --bad-bg: #331b18; --violet: #a99cff; --violet-bg: #25213d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121211; --surface: #1b1b1a; --surface-2: #242422; --border: #33332f;
+  --text: #ececea; --muted: #9a9a94; --accent: #5b9bff; --accent-ink: #0b0b0a; --accent-soft: #1c2a40;
+  --good: #4cc38a; --bad: #ff7a6b; --warn: #f0b456; --warn-bg: #2e2412; --warn-border: #5a4520;
+  --good-bg: #15291f; --bad-bg: #331b18; --violet: #a99cff; --violet-bg: #25213d;
+}
+:root[data-theme="dark"] { color-scheme: dark; } :root[data-theme="light"] { color-scheme: light; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+nav a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 7px; font-weight: 500; }
+nav a.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.me { color: var(--muted); font-size: 12.5px; } .me a { color: inherit; }
+.theme-btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; width: 34px; height: 32px; padding: 0; cursor: pointer; font-size: 15px; }
+button, select, input, textarea { font: inherit; color: inherit; }
+button { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover { background: var(--surface-2); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.danger { color: var(--bad); }
+button.sm { font-size: 12px; padding: 3px 9px; border-radius: 7px; }
+button:disabled { opacity: .55; cursor: default; }
+input[type=text], input[type=number], select, textarea { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+textarea { width: 100%; resize: vertical; line-height: 1.45; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.card.warn { border-color: var(--warn-border); background: var(--warn-bg); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; cursor: pointer; }
+.kpi.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.kpi .l { color: var(--muted); font-size: 12px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.kpi .s { color: var(--muted); font-size: 11.5px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+label.f { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 10px 0; }
+.table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; white-space: nowrap; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.who { display: flex; gap: 8px; align-items: center; min-width: 160px; }
+.who img { width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2); flex: none; }
+.who b { font-weight: 600; } .who small { display: block; color: var(--muted); font-size: 11.5px; }
+.badge { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.b-drafted { background: var(--warn-bg); color: var(--warn); }
+.b-followup_drafted { background: var(--warn-bg); color: var(--warn); }
+.b-approved { background: var(--accent-soft); color: var(--accent); }
+.b-sent { background: var(--violet-bg); color: var(--violet); }
+.b-replied { background: var(--good-bg); color: var(--good); }
+.b-failed { background: var(--bad-bg); color: var(--bad); }
+.b-active { background: var(--good-bg); color: var(--good); }
+.b-paused { background: var(--surface-2); color: var(--muted); }
+.b-sim { background: var(--violet-bg); color: var(--violet); }
+.q { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.q .top { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.q textarea { min-height: 84px; font-size: 13px; }
+.q .meta { color: var(--muted); font-size: 11.5px; }
+.empty { color: var(--muted); padding: 18px 0; text-align: center; }
+.note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.err { color: var(--bad); font-size: 12.5px; }
+.msg { font-size: 12.5px; white-space: pre-wrap; background: var(--surface-2); border-radius: 8px; padding: 6px 9px; margin: 4px 0; max-width: 520px; }
+.msg.in { background: var(--good-bg); }
+.msg .h { color: var(--muted); font-size: 11px; display: block; margin-bottom: 2px; white-space: normal; }
+.cand { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+.cand label { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+.cand label:last-child { border-bottom: none; }
+.cand label small { color: var(--muted); margin-left: auto; white-space: nowrap; }
+.toast { position: sticky; bottom: 16px; margin: 0 auto; width: fit-content; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 9px; font-size: 13px; }
+details > summary { cursor: pointer; font-weight: 600; }
+code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <h1>X Campaign Analyzer</h1>
+      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/outreach" class="on">Outreach</a><a href="/email">Email</a><a href="/builder">Wave builder</a></nav>
+      <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle light / dark theme"></button>
+    </div>
+    <span class="me" id="me"></span>
+  </header>
+
+  <div class="card" id="setup"></div>
+
+  <div class="row" style="margin-bottom:14px">
+    <select id="campSel" aria-label="Campaign"></select>
+    <button id="newCamp">+ New campaign</button>
+    <span id="campStatus"></span>
+    <button id="toggle" class="primary" hidden></button>
+    <span style="flex:1"></span>
+    <button id="stopAll" class="danger" title="Pause every active campaign">Stop all sending</button>
+  </div>
+
+  <div id="noCamp" class="card" hidden>
+    <h2>Start your first DM campaign</h2>
+    <p class="sub">A campaign is one sending X account, a first message and an optional follow-up. You pick creators, review the drafted DMs, approve them, and the platform sends them on a schedule and watches for replies.</p>
+    <button class="primary" onclick="newCampaign()">Create campaign</button>
+  </div>
+
+  <div id="main" hidden>
+    <div class="kpis" id="kpis"></div>
+
+    <div class="grid2">
+      <div class="card">
+        <details id="settingsBox">
+          <summary>Campaign settings</summary>
+          <div style="margin-top:10px">
+            <div class="fields">
+              <label class="f" style="grid-column:span 2">Name<input type="text" id="s_name"></label>
+              <label class="f" style="grid-column:span 2">Send from<select id="s_account"></select></label>
+            </div>
+            <label class="f">First message
+              <textarea id="s_message" rows="6" placeholder="Hi {first_name}, I'm Dimash from Nace.ai…"></textarea></label>
+            <div class="note">Fields: <code>{first_name}</code> <code>{name}</code> <code>{handle}</code> <code>{price}</code> (the plan's price, else their quoted rate, else "your usual rate")</div>
+            <label class="f" style="margin-top:10px">Follow-up (sent only if they don't reply; leave empty for none)
+              <textarea id="s_followup" rows="3" placeholder="Hey {first_name}, bumping this in case it got buried."></textarea></label>
+            <div class="fields">
+              <label class="f">Follow up after (days)<input type="number" id="s_followup_days" min="1" max="30"></label>
+              <label class="f">Max follow-ups<input type="number" id="s_max_followups" min="0" max="3"></label>
+              <label class="f">DMs per day<input type="number" id="s_daily_limit" min="1" max="500"></label>
+              <label class="f">Send from (hour)<input type="number" id="s_send_start" min="0" max="23"></label>
+              <label class="f">Send until (hour)<input type="number" id="s_send_end" min="1" max="24"></label>
+              <label class="f">Time zone<input type="text" id="s_tz"></label>
+            </div>
+            <div class="row">
+              <button class="primary" onclick="saveSettings()">Save</button>
+              <button onclick="saveSettings(true)" title="Re-write drafts that are still waiting for approval from the new template">Save and re-draft waiting DMs</button>
+              <span style="flex:1"></span>
+              <button class="danger sm" onclick="deleteCampaign()">Delete campaign</button>
+            </div>
+            <div class="note" id="preview"></div>
+          </div>
+        </details>
+      </div>
+
+      <div class="card">
+        <details id="addBox">
+          <summary>Add creators <span class="badge" id="candCount"></span></summary>
+          <div style="margin-top:10px">
+            <div class="row" style="margin-bottom:8px">
+              <input type="text" id="candQ" placeholder="Filter by handle or name" style="flex:1;min-width:140px">
+              <label style="font-size:12.5px;display:flex;gap:5px;align-items:center"><input type="checkbox" id="hideOut" checked> Hide already contacted</label>
+            </div>
+            <div class="cand" id="cand"></div>
+            <div class="row" style="margin-top:10px">
+              <button onclick="selAll(true)" class="sm">Select all shown</button>
+              <button onclick="selAll(false)" class="sm">Clear</button>
+              <span style="flex:1"></span>
+              <button class="primary" onclick="addSelected()">Add and draft DMs</button>
+            </div>
+            <div class="note">New creators come from the <a href="/influencers">Influencers</a> page. Adding them here only writes drafts; nothing is sent until you approve.</div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <div><h2>Approval queue</h2><p class="sub" style="margin:0" id="queueSub"></p></div>
+        <div class="row">
+          <button onclick="qSel(true)" class="sm">Select all</button>
+          <button onclick="bulk('skip')" class="sm">Skip selected</button>
+          <button onclick="bulk('approve')" class="primary">Approve selected</button>
+        </div>
+      </div>
+      <div id="queue"></div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <div><h2>People</h2><p class="sub" style="margin:0" id="peopleSub"></p></div>
+        <button class="sm" id="clearFilter" hidden onclick="setFilter(null)">Show everyone</button>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Creator</th><th>Stage</th><th>Conversation</th><th class="num">Last sent</th><th class="num">Next follow-up</th><th></th></tr></thead>
+        <tbody id="people"></tbody>
+      </table></div>
+    </div>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const int = (n) => (n || 0).toLocaleString();
+const kfmt = (n) => n == null ? "—" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n);
+const when = (t) => t ? new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+  return j;
+}
+const pref = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+               set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+let D = null, cid = new URLSearchParams(location.search).get("campaign") || pref.get("xca_out_camp", ""), filter = null, timer = null, editing = false;
+const drafts = {};          // message id -> text being edited, kept across refreshes
+const qChecked = new Set(), cChecked = new Set();
+
+function toast(t, bad) {
+  const el = $("toast"); el.textContent = t; el.style.background = bad ? "var(--bad)" : ""; el.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 3200);
+}
+async function act(name, body, okMsg) {
+  try { const r = await api("/api/outreach/" + name, body); if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg); await load(); return r; }
+  catch (e) { toast(e.message, true); }
+}
+
+const STAGES = {
+  drafted: "Needs approval", followup_drafted: "Follow-up needs approval", approved: "Queued to send", sent: "Sent, waiting",
+  replied: "Replied", failed: "Can't DM", stopped: "Stopped", done: "Done, no reply",
+};
+
+function renderSetup() {
+  const el = $("setup"), A = D.accounts;
+  const real = A.filter((a) => !a.simulated), sim = A.find((a) => a.simulated);
+  let h = "";
+  if (!D.enabled) {
+    el.className = "card warn";
+    h += `<h2>Prototype mode: the X API isn't connected yet</h2>
+      <p class="sub" style="margin-bottom:8px">Everything works except real sending. Use the <b>demo account</b> to watch the full flow (it pretends to send, never contacts X),
+      or send by hand: each approved DM gets an <b>Open in X</b> button that opens the chat with the text typed in.
+      To send automatically, create an app at <a href="https://console.x.com" target="_blank" rel="noopener">console.x.com</a> and set <code>X_CLIENT_ID</code> / <code>X_CLIENT_SECRET</code>.</p>`;
+  } else {
+    el.className = "card";
+    h += `<h2>Sending accounts</h2><p class="sub">DMs go out through the official X API from these accounts.</p>`;
+  }
+  h += `<div class="row">`;
+  for (const a of A) {
+    h += `<span class="badge ${a.simulated ? "b-sim" : "b-active"}" title="${a.simulated ? "Simulated: nothing reaches X" : "Connected by " + esc(a.connected_by)}">
+      @${esc(a.handle)}${a.simulated ? " · demo" : ""} · ${a.sent_today}/${a.daily_cap} today${a.rate_limited ? " · rate-limited" : ""}</span>
+      ${a.error ? `<span class="err">${esc(a.error)}</span>` : ""}
+      <button class="sm" onclick="removeAccount('${esc(a.user_id)}','${esc(a.handle)}')">Remove</button>`;
+  }
+  if (D.enabled) h += `<a href="/auth/x/connect"><button class="primary sm">${real.length ? "+ Connect another X account" : "Connect X account"}</button></a>`;
+  if (!sim) h += `<button class="sm" onclick="act('sim_account', {}, 'Demo account added')">+ Add demo account</button>`;
+  h += `</div>`;
+  const p = new URLSearchParams(location.search);
+  if (p.get("x_error")) h += `<p class="err" style="margin:8px 0 0">${esc(p.get("x_error"))}</p>`;
+  el.innerHTML = h;
+}
+
+function renderCampaigns() {
+  const sel = $("campSel");
+  sel.innerHTML = D.campaigns.map((c) => `<option value="${c.id}">${esc(c.name)} · ${c.targets} people</option>`).join("");
+  const c = D.campaign;
+  $("noCamp").hidden = !!c; $("main").hidden = !c; sel.hidden = !c;
+  $("toggle").hidden = !c; $("campStatus").innerHTML = "";
+  if (!c) return;
+  sel.value = c.id;
+  const acct = D.account;
+  $("campStatus").innerHTML = `<span class="badge b-${c.status}">${c.status === "active" ? "Sending on" : "Paused"}</span>
+    ${c.status === "active" && acct && !acct.simulated && !D.in_window ? `<span class="badge">outside send window (${c.send_start}:00–${c.send_end}:00 ${esc(c.tz)})</span>` : ""}
+    ${c.plan_id ? `<a href="/builder?plan=${c.plan_id}" class="badge" style="text-decoration:none" title="Creators and prices come from this Wave builder plan and stay in sync with it">plan: ${esc(c.plan_name || "Wave builder")} ↗</a>` : ""}
+    ${acct ? `<span class="badge ${acct.simulated ? "b-sim" : ""}">from @${esc(acct.handle)}${acct.simulated ? " (demo)" : ""}</span>` : `<span class="badge b-failed">no sending account</span>`}`;
+  $("toggle").textContent = c.status === "active" ? "Pause sending" : "Start sending";
+}
+
+function renderKpis() {
+  const T = D.targets, n = (st) => T.filter((t) => st.includes(t.stage)).length;
+  const sent = T.filter((t) => t.last_sent_at).length, rep = n(["replied"]);
+  const cards = [
+    ["People", T.length, "in this campaign", null],
+    ["Needs approval", n(["drafted", "followup_drafted"]), "drafts waiting for you", ["drafted", "followup_drafted"]],
+    ["Queued", n(["approved"]), "approved, sending soon", ["approved"]],
+    ["Waiting for reply", n(["sent"]), "DM sent", ["sent"]],
+    ["Replied", rep, sent ? `${Math.round(rep / sent * 100)}% of contacted` : "reply rate", ["replied"]],
+    ["Can't DM", n(["failed"]), "DMs closed / errors", ["failed"]],
+    ["No reply", n(["done", "stopped"]), "sequence finished", ["done", "stopped"]],
+  ];
+  $("kpis").innerHTML = cards.map(([l, v, s, f]) => `<div class="kpi ${filter && f && f.join() === filter.join() ? "on" : ""}" data-f="${f ? f.join(",") : ""}">
+    <div class="l">${l}</div><div class="v">${int(v)}</div><div class="s">${s}</div></div>`).join("");
+  $("kpis").querySelectorAll(".kpi").forEach((k) => k.onclick = () => setFilter(k.dataset.f ? k.dataset.f.split(",") : null));
+}
+function setFilter(f) { filter = f && filter && f.join() === filter.join() ? null : f; renderKpis(); renderPeople(); }
+
+function fillSettings() {
+  const c = D.campaign;
+  if (document.activeElement && document.activeElement.id?.startsWith("s_")) return;   // don't clobber typing
+  for (const k of ["name", "message", "followup", "followup_days", "max_followups", "daily_limit", "send_start", "send_end", "tz"]) $("s_" + k).value = c[k] ?? "";
+  $("s_account").innerHTML = `<option value="">— pick an account —</option>` + D.accounts.map((a) =>
+    `<option value="${esc(a.user_id)}">@${esc(a.handle)}${a.simulated ? " (demo, simulated)" : ""}</option>`).join("");
+  $("s_account").value = c.account_id || "";
+  const t = D.targets[0] || D.candidates[0];
+  $("preview").innerHTML = t ? `Preview for @${esc(t.handle)}: <span class="msg" style="display:block">${esc(render(c.message, t))}</span>` : "";
+}
+function render(tpl, cr) {
+  const name = (cr.name || cr.handle || "").trim().replace(/^@/, "");
+  let first = name.split(/[\s|·,(]/)[0] || "";
+  if (!/[A-Za-z]/.test(first)) first = "there";
+  const v = { first_name: first, name: name || "there", handle: "@" + (cr.handle || "").replace(/^@/, ""),
+              price: cr.price ? "$" + Math.round(cr.price).toLocaleString() : "your usual rate" };
+  return (tpl || "").replace(/\{(\w+)\}/g, (m, k) => v[k] ?? m).trim();
+}
+
+function renderCandidates() {
+  const q = $("candQ").value.trim().toLowerCase(), hide = $("hideOut").checked;
+  const rows = D.candidates.filter((c) => (!hide || !c.outreached) && (!q || (c.handle + " " + (c.name || "")).toLowerCase().includes(q)));
+  $("candCount").textContent = rows.length;
+  $("cand").innerHTML = rows.length ? rows.map((c) => `<label><input type="checkbox" data-k="${esc(c.key)}" ${cChecked.has(c.key) ? "checked" : ""}>
+      <span><b>@${esc(c.handle)}</b> ${esc(c.name && c.name !== c.handle ? c.name : "")}</span>
+      <small>${kfmt(c.followers)} followers · ${kfmt(c.median_views)} views${c.manual_verdict ? " · " + esc(c.manual_verdict) : ""}${c.outreached ? " · contacted " + esc(c.outreach_from || "") : ""}</small></label>`).join("")
+    : `<div class="empty">No creators to add. Add some on the Influencers page.</div>`;
+  $("cand").querySelectorAll("input").forEach((i) => i.onchange = () => i.checked ? cChecked.add(i.dataset.k) : cChecked.delete(i.dataset.k));
+}
+function selAll(on) { $("cand").querySelectorAll("input").forEach((i) => { i.checked = on; on ? cChecked.add(i.dataset.k) : cChecked.delete(i.dataset.k); }); }
+async function addSelected() {
+  if (!cChecked.size) return toast("Pick some creators first", true);
+  const r = await act("add", { campaign_id: D.campaign.id, keys: [...cChecked] }, (r) => `${r.added} DMs drafted, waiting for your approval`);
+  if (r) cChecked.clear();
+}
+
+function composeUrl(t, body) {
+  return t.x_user_id ? `https://x.com/messages/compose?recipient_id=${encodeURIComponent(t.x_user_id)}&text=${encodeURIComponent(body)}` : `https://x.com/${encodeURIComponent(t.handle)}`;
+}
+
+function renderQueue() {
+  const items = [];
+  for (const t of D.targets) for (const m of t.messages) if (m.status === "pending" || m.status === "approved") items.push([t, m]);
+  const pend = items.filter(([, m]) => m.status === "pending").length;
+  $("queueSub").textContent = items.length
+    ? `${pend} waiting for approval · ${items.length - pend} approved and queued. Edit any text before approving. Nothing is sent without approval.`
+    : "Nothing waiting. Add creators to draft DMs.";
+  for (const id of [...qChecked]) if (!items.some(([, m]) => m.id === id && m.status === "pending")) qChecked.delete(id);
+  $("queue").innerHTML = items.length ? items.map(([t, m]) => {
+    const body = drafts[m.id] ?? m.body;
+    return `<div class="q">
+      <div class="top">
+        <label class="who" style="cursor:pointer">${m.status === "pending" ? `<input type="checkbox" data-q="${m.id}" ${qChecked.has(m.id) ? "checked" : ""}>` : ""}
+          <img src="${esc(t.avatar || "")}" alt="" onerror="this.style.visibility='hidden'">
+          <span><b>@${esc(t.handle)}</b><small>${esc(t.name || "")} · ${kfmt(t.followers)} followers${t.price ? " · offer $" + Math.round(t.price).toLocaleString() : ""}${t.outreached && m.kind === "first" ? ` · <span style="color:var(--warn)">already contacted${t.outreach_from ? " from " + esc(t.outreach_from) : ""}</span>` : ""}</small></span></label>
+        <span class="row">
+          <span class="badge ${m.status === "approved" ? "b-approved" : "b-drafted"}">${m.kind === "followup" ? "Follow-up · " : ""}${m.status === "approved" ? "Approved by " + esc(m.approved_by) : "Needs approval"}</span>
+          ${m.status === "pending" ? `<button class="sm primary" onclick="bulk('approve',[${m.id}])">Approve</button>` : `<button class="sm" onclick="bulk('unapprove',[${m.id}])">Hold</button>`}
+          <button class="sm" onclick="bulk('skip',[${m.id}])">Skip</button>
+          <a href="${composeUrl(t, body)}" target="_blank" rel="noopener" title="Opens the DM on x.com with this text typed in. Send it there, then click Mark sent."><button class="sm">Open in X</button></a>
+          <button class="sm" onclick="sentByHand(${m.id})" title="You sent it yourself on x.com">Mark sent</button>
+        </span>
+      </div>
+      <textarea data-m="${m.id}" aria-label="DM to @${esc(t.handle)}">${esc(body)}</textarea>
+      <div class="meta">${body.length.toLocaleString()} characters${drafts[m.id] != null && drafts[m.id] !== m.body ? ` · <a href="#" onclick="saveEdit(${m.id});return false">Save edit</a>` : ""}</div>
+    </div>`;
+  }).join("") : `<div class="empty">The queue is empty.</div>`;
+  $("queue").querySelectorAll("input[data-q]").forEach((i) => i.onchange = () => i.checked ? qChecked.add(+i.dataset.q) : qChecked.delete(+i.dataset.q));
+  $("queue").querySelectorAll("textarea").forEach((ta) => {
+    ta.onfocus = () => editing = true;
+    ta.onblur = () => { editing = false; if (drafts[ta.dataset.m] != null) saveEdit(+ta.dataset.m); };
+    ta.oninput = () => drafts[ta.dataset.m] = ta.value;
+  });
+}
+function qSel(on) { $("queue").querySelectorAll("input[data-q]").forEach((i) => { i.checked = on; on ? qChecked.add(+i.dataset.q) : qChecked.delete(+i.dataset.q); }); }
+async function saveEdit(id) {
+  if (drafts[id] == null) return;
+  const body = drafts[id];
+  try { await api("/api/outreach/edit", { id, body }); delete drafts[id]; await load(); } catch (e) { toast(e.message, true); }
+}
+async function bulk(kind, ids) {
+  ids = ids || [...qChecked];
+  if (!ids.length) return toast("Select some DMs first", true);
+  for (const id of ids) if (drafts[id] != null) await saveEdit(id);
+  const r = await act(kind, { ids }, (r) => kind === "approve" ? `${r.approved} approved: they'll go out on schedule` : kind === "skip" ? `${r.skipped} skipped` : "Held back in the queue");
+  if (r) ids.forEach((i) => qChecked.delete(i));
+}
+function sentByHand(id) { act("sent_by_hand", { id }, "Marked as sent"); }
+
+function renderPeople() {
+  const sim = D.account && D.account.simulated;
+  const rows = D.targets.filter((t) => !filter || filter.includes(t.stage));
+  $("clearFilter").hidden = !filter;
+  $("peopleSub").textContent = filter ? `${rows.length} shown (${filter.map((f) => STAGES[f]).join(", ")})` : `${D.targets.length} in this campaign`;
+  $("people").innerHTML = rows.length ? rows.map((t) => {
+    const sent = t.messages.filter((m) => m.status === "sent" || m.status === "failed");
+    const convo = sent.map((m) => `<div class="msg"><span class="h">${m.kind === "followup" ? "Follow-up" : "First DM"} · ${m.status === "failed" ? "failed" : when(m.sent_at)}${m.error && m.status === "sent" ? " · " + esc(m.error) : ""}</span>${esc(m.body)}</div>${m.status === "failed" ? `<div class="err">${esc(m.error)}</div>` : ""}`).join("")
+      + (t.reply_text ? `<div class="msg in"><span class="h">Reply · ${when(t.replied_at)}</span>${esc(t.reply_text)}</div>` : "");
+    const live = ["sent", "approved", "drafted", "followup_drafted"].includes(t.stage);
+    return `<tr>
+      <td><div class="who"><img src="${esc(t.avatar || "")}" alt="" onerror="this.style.visibility='hidden'">
+        <span><a href="https://x.com/${esc(t.handle)}" target="_blank" rel="noopener" style="color:inherit"><b>@${esc(t.handle)}</b></a><small>${esc(t.name || "")} · ${kfmt(t.followers)}</small></span></div></td>
+      <td><span class="badge b-${t.stage}">${STAGES[t.stage] || t.stage}</span>${t.followups_sent ? `<div class="note" style="margin:3px 0 0">${t.followups_sent} follow-up${t.followups_sent > 1 ? "s" : ""} sent</div>` : ""}</td>
+      <td>${convo || `<span class="note">Not contacted yet</span>`}</td>
+      <td class="num">${when(t.last_sent_at)}</td>
+      <td class="num">${t.next_due_at ? when(t.next_due_at) : "—"}</td>
+      <td class="num"><div class="row" style="justify-content:flex-end">
+        ${sim && t.stage === "sent" ? `<button class="sm" onclick="simReply(${t.id})" title="Demo only: pretend they answered">Simulate reply</button>` : ""}
+        ${t.stage === "sent" ? `<button class="sm" onclick="stage(${t.id},'replied')" title="They answered somewhere else">Mark replied</button>` : ""}
+        ${live ? `<button class="sm" onclick="stage(${t.id},'stopped')">Stop</button>` : ""}
+        ${!t.last_sent_at ? `<button class="sm danger" onclick="act('remove',{ids:[${t.id}]},'Removed')">Remove</button>` : ""}
+      </div></td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">${D.targets.length ? "No one in this stage." : "No one yet. Open Add creators above."}</td></tr>`;
+}
+function stage(id, st) { act("stage", { ids: [id], stage: st }, st === "replied" ? "Marked replied: follow-ups cancelled" : "Stopped"); }
+function simReply(id) {
+  const text = prompt("Their reply (demo):", "Hey! Sure, happy to chat. What's the budget?");
+  if (text !== null) act("sim_reply", { target_id: id, text }, "Reply recorded: follow-ups cancelled");
+}
+
+async function saveSettings(redraft) {
+  const b = { id: D.campaign.id, account_id: $("s_account").value };
+  for (const k of ["name", "message", "followup", "tz"]) b[k] = $("s_" + k).value;
+  for (const k of ["followup_days", "max_followups", "daily_limit", "send_start", "send_end"]) b[k] = $("s_" + k).value === "" ? null : +$("s_" + k).value;
+  try {
+    await api("/api/outreach/campaign", b);
+    if (redraft) { const r = await api("/api/outreach/redraft", { campaign_id: D.campaign.id }); toast(`Saved · ${r.redrafted} waiting DMs re-drafted`); }
+    else toast("Saved");
+    document.activeElement?.blur(); await load();
+  } catch (e) { toast(e.message, true); }
+}
+const DEFAULT_MSG = "Hi {first_name}! I'm Dimash from Nace.ai. We build AI agents for finance and accounting teams, and your audience looks like a great fit.\n\nWould you be open to a paid post about us? If so, what's your rate for a post or a thread?";
+const DEFAULT_FU = "Hey {first_name}, just bumping this in case it got buried. Happy to share details.";
+async function newCampaign() {
+  const name = prompt("Campaign name", "Wave " + (D.campaigns.length + 1) + " DMs");
+  if (!name) return;
+  const acct = D.accounts.find((a) => !a.simulated) || D.accounts[0];
+  try {
+    const r = await api("/api/outreach/campaign", { name, message: DEFAULT_MSG, followup: DEFAULT_FU, account_id: acct ? acct.user_id : null });
+    cid = String(r.id); pref.set("xca_out_camp", cid); await load();
+    $("settingsBox").open = true; $("addBox").open = true;
+  } catch (e) { toast(e.message, true); }
+}
+async function deleteCampaign() {
+  if (!confirm(`Delete "${D.campaign.name}" with its drafts and history? Creators stay on the Influencers page.`)) return;
+  await act("delete", { id: D.campaign.id }, "Campaign deleted"); cid = ""; pref.set("xca_out_camp", ""); await load();
+}
+async function removeAccount(id, handle) {
+  if (!confirm(`Remove @${handle}? Campaigns sending from it are paused.`)) return;
+  act("account_remove", { user_id: id }, "Account removed");
+}
+
+$("campSel").onchange = () => { cid = $("campSel").value; pref.set("xca_out_camp", cid); filter = null; load(); };
+$("newCamp").onclick = newCampaign;
+$("toggle").onclick = () => {
+  const on = D.campaign.status !== "active";
+  if (on) {
+    const q = D.targets.reduce((n, t) => n + t.messages.filter((m) => m.status === "approved").length, 0);
+    const a = D.account;
+    if (a && !a.simulated && !confirm(`Start sending from @${a.handle}? ${q} approved DM${q === 1 ? "" : "s"} will go out through the X API, up to ${D.campaign.daily_limit} a day, ${D.campaign.send_start}:00–${D.campaign.send_end}:00 ${D.campaign.tz}.`)) return;
+  }
+  act("status", { id: D.campaign.id, status: on ? "active" : "paused" }, on ? "Sending is on" : "Paused");
+};
+$("stopAll").onclick = () => act("stop_all", {}, (r) => `${r.paused} campaign${r.paused === 1 ? "" : "s"} paused`);
+$("candQ").oninput = renderCandidates; $("hideOut").onchange = renderCandidates;
+
+async function load() {
+  clearTimeout(timer);
+  try {
+    D = await api("/api/outreach" + (cid ? "?campaign=" + cid : ""));
+    if (D.campaign) cid = String(D.campaign.id);
+    renderSetup(); renderCampaigns();
+    if (D.campaign) { renderKpis(); fillSettings(); renderCandidates(); if (!editing) renderQueue(); renderPeople(); }
+  } catch (e) { /* keep last render */ }
+  timer = setTimeout(load, D?.campaign?.status === "active" ? 4000 : 20000);
+}
+api("/api/me").then((u) => { if (u.auth) $("me").innerHTML = `${esc(u.email)} · <a href="/auth/logout">Sign out</a>`; }).catch(() => {});
+load();
+</script>
+<script>
+(function () {
+  const root = document.documentElement, btn = document.getElementById("themeBtn");
+  const dark = () => root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  const paint = () => { btn.textContent = dark() ? "☀" : "☾"; btn.title = dark() ? "Switch to light theme" : "Switch to dark theme"; };
+  btn.onclick = () => { root.dataset.theme = dark() ? "light" : "dark"; try { localStorage.setItem("xca_theme", root.dataset.theme); } catch (e) {} paint(); };
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paint);
+  paint();
+})();
+</script>
+</body>
+</html>

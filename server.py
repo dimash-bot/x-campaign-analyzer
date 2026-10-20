@@ -26,8 +26,12 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
+import requests
+
 import apify_client
 import auth
+import outreach
+import x_dm
 import mcp_server
 import platforms
 import resend_client
@@ -167,6 +171,7 @@ def init_db():
         add_col("sample_posts", "source", "TEXT")   # links (pasted) | apify
         if not c.execute("SELECT 1 FROM campaigns").fetchone():
             c.execute("INSERT INTO campaigns(name, created_at) VALUES (?, ?)", ("My first campaign", now()))
+        outreach.init_tables(c)   # X DM outreach (outreach.py)
 
 
 # ---------------------------------------------------------------- background X fetching
@@ -1149,9 +1154,11 @@ def plans_list():
     with db() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM plans ORDER BY updated_at DESC, id DESC")]
         waves = {r[0]: r[1] for r in c.execute("SELECT id, name FROM campaigns")}
+        dm = outreach.plan_stats(c)
     for r in rows:
         r["items"] = json.loads(r["items"] or "[]")
         r["campaign_name"] = waves.get(r["campaign_id"])
+        r["outreach"] = dm.get(r["id"])
         if r["campaign_id"] not in waves:   # wave was deleted on the Waves page
             r["campaign_id"] = None
     return {"plans": rows}
@@ -2157,6 +2164,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/html; charset=utf-8")
         if u.path == "/api/creators":
             return self._send(200, creators_view())
+        if u.path == "/outreach":
+            with open(os.path.join(HERE, "static", "outreach.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/api/outreach":
+            return self._send(200, outreach.view(q.get("campaign", [""])[0] or None))
+        if u.path == "/auth/x/connect":
+            if not x_dm.enabled():
+                return self._redirect("/outreach?x_error=" + quote("X API isn't set up yet: set X_CLIENT_ID (and X_CLIENT_SECRET) first."))
+            state_, (verifier, challenge) = auth.new_state(), x_dm.new_pkce()
+            return self._redirect(x_dm.connect_url(self._base_url() + "/auth/x/callback", state_, challenge),
+                                  [self._set_cookie("x_oauth", auth.sign({"s": state_, "v": verifier, "exp": time.time() + 600}), 600)])
+        if u.path == "/auth/x/callback":
+            st = auth.unsign(self._cookie("x_oauth") or "")
+            clear = [self._set_cookie("x_oauth", "", 0)]
+            if q.get("error"):
+                return self._redirect("/outreach?x_error=" + quote("X sign-in was cancelled."), clear)
+            if not st or st.get("s") != q.get("state", [""])[0] or "code" not in q:
+                return self._redirect("/outreach?x_error=" + quote("X sign-in expired. Try again."), clear)
+            try:
+                tok = x_dm.exchange(q["code"][0], self._base_url() + "/auth/x/callback", st["v"])
+            except (x_dm.DMError, requests.RequestException) as e:
+                return self._redirect("/outreach?x_error=" + quote(str(e)[:200]), clear)
+            outreach.save_account(tok, user["email"])
+            print(f"outreach: X account @{tok['handle']} connected by {user['email']}", flush=True)
+            return self._redirect("/outreach?x=connected", clear)
         if u.path == "/agencies":   # replaced by Email analytics
             return self._redirect("/email")
         if u.path == "/auth/postmaster":
@@ -2300,14 +2332,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/plans/save":
             b = json.loads(self._body_bytes() or b"{}")
             try:
-                return self._send(200, save_plan(b.get("name"), b.get("items"), (b.get("notes") or "").strip() or None,
-                                                 user.get("email"), b.get("id")))
+                r = save_plan(b.get("name"), b.get("items"), (b.get("notes") or "").strip() or None, user.get("email"), b.get("id"))
+                r["outreach"] = outreach.sync_plan(r["id"], user.get("email"))   # its DM campaign follows the plan
+                return self._send(200, r)
             except (ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/plans/price":
             b = json.loads(self._body_bytes() or b"{}")
             try:
-                return self._send(200, set_plan_price(b["plan_id"], b["key"], b.get("price"), user.get("email")))
+                r = set_plan_price(b["plan_id"], b["key"], b.get("price"), user.get("email"))
+                outreach.sync_plan(b["plan_id"], user.get("email"))
+                return self._send(200, r)
             except (KeyError, ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/plans/to_wave":
@@ -2319,6 +2354,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/plans/delete":
             b = json.loads(self._body_bytes() or b"{}")
             try:
+                outreach.plan_deleted(b["id"])
                 return self._send(200, delete_plan(b["id"]))
             except (KeyError, ValueError, TypeError) as e:
                 return self._send(400, {"error": str(e)})
@@ -2361,6 +2397,34 @@ class Handler(BaseHTTPRequestHandler):
                 if r["platform"] == "x":
                     enqueue(r["key"], r["key"], "creator", r["handle"])
             return self._send(200, {"queued": sum(r["platform"] == "x" for r in v["creators"])})
+        if path.startswith("/api/outreach/"):
+            b = json.loads(self._body_bytes() or b"{}")
+            act, me, ids = path.rsplit("/", 1)[1], user["email"], b.get("ids") or []
+            handlers = {
+                "campaign": lambda: outreach.save_campaign(b, me),
+                "status": lambda: outreach.set_status(b["id"], b["status"]),
+                "stop_all": outreach.stop_all,
+                "delete": lambda: outreach.delete_campaign(b["id"]),
+                "add": lambda: outreach.add_targets(b["campaign_id"], b.get("keys") or [], me),
+                "redraft": lambda: outreach.redraft(b["campaign_id"]),
+                "edit": lambda: outreach.edit_message(b["id"], b.get("body")),
+                "approve": lambda: outreach.approve(ids, me),
+                "unapprove": lambda: outreach.unapprove(ids),
+                "skip": lambda: outreach.skip(ids),
+                "stage": lambda: outreach.set_target_stage(ids, b.get("stage")),
+                "remove": lambda: outreach.remove_targets(ids),
+                "sent_by_hand": lambda: outreach.mark_sent_by_hand(b["id"], me),
+                "sim_account": lambda: outreach.add_sim_account(me),
+                "sim_reply": lambda: outreach.simulate_reply(b["target_id"], (b.get("text") or "").strip() or "Hey! Sure, what's the budget?"),
+                "account_cap": lambda: outreach.set_account_cap(b["user_id"], b["cap"]),
+                "account_remove": lambda: outreach.remove_account(b["user_id"]),
+            }
+            if act not in handlers:
+                return self._send(404, {"error": "not found"})
+            try:
+                return self._send(200, handlers[act]())
+            except (ValueError, KeyError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/users/import":
             tz = parse_qs(u.query).get("tz", ["America/Los_Angeles"])[0]
             try:
@@ -2485,5 +2549,7 @@ if __name__ == "__main__":
     threading.Thread(target=backfill_creators, daemon=True).start()
     threading.Thread(target=resend_worker, daemon=True).start()
     threading.Thread(target=postmaster_worker, daemon=True).start()
+    outreach.setup(db, _db_lock, now)
+    threading.Thread(target=outreach.worker, daemon=True).start()
     print(f"X campaign analyzer → http://{HOST}:{PORT}  (data: {DB_PATH}, login: {'Google @' + auth.ALLOWED_DOMAIN if auth.ENABLED else 'OFF'})", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

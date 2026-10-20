@@ -27,6 +27,25 @@ not signed in → /login ──▶ /auth/login ──▶ Google ──▶ /auth/
 - **Data**: one SQLite file on a persistent volume. Daily snapshot to `backups/` (14 kept); the
   Backup button downloads the whole DB, Restore uploads one (current data is snapshotted first).
 
+## DM outreach (Outreach tab)
+
+Automated X DMs to creators through the official X API v2 (`outreach.py`, `x_dm.py`).
+
+- **Campaign** = one sending X account + a first message + an optional follow-up, a daily cap and a send window.
+  Saving a **Wave builder** plan creates its campaign and keeps it in sync: creators added → first DM drafted,
+  removed → dropped if not messaged yet, planned price changed → waiting draft re-written (`{price}` in the template).
+- **Nothing is sent without approval.** Drafts wait in the Approval queue; approved DMs go out one at a time,
+  2–5 min apart, inside the window, up to the cap. "Stop all sending" pauses every campaign.
+- **Replies**: the sending account's inbox is read every 8 h (each DM event read is billed); a reply marks the
+  creator Replied and cancels their follow-ups. No reply after N days → follow-up drafted, back to approval.
+- **Without the API**: a demo account runs the whole flow without contacting X, and every DM has *Open in X*
+  (chat opened with the text typed in) + *Mark sent* for sending by hand.
+- **Cost** (pay-per-use): ~$0.015 per DM sent, ~$0.01 per DM event read.
+
+Setup: create an app at [console.x.com](https://console.x.com) → OAuth 2.0 on, type **Web App**, permissions
+**Read and write and Direct message**, callback `https://<domain>/auth/x/callback`; set `X_CLIENT_ID` /
+`X_CLIENT_SECRET`, then Outreach → **Connect X account** and log in as the account that sends.
+
 ## Run locally
 
 ```bash
@@ -58,6 +77,7 @@ python3 server.py            # http://localhost:8787 — login is off unless GOO
 | `EMAIL_UTM_MEDIUMS` / `EMAIL_UTM_SOURCES` | optional — which UTM values mark a signup as coming from email (defaults `email,e-mail,newsletter` / `email,resend,newsletter,broadcast`); matched to a broadcast by `utm_campaign` |
 | `RESEND_API_KEY` | optional — Resend key with **Full access**; the Email tab syncs every sent email + its status every 30 min |
 | `RESEND_WEBHOOK_SECRET` | optional — signing secret (`whsec_…`) of a Resend webhook pointed at `https://<domain>/webhooks/resend` (live opens, clicks, bounces) |
+| `X_CLIENT_ID`, `X_CLIENT_SECRET` | optional — X API app (OAuth 2.0) for the Outreach tab; without them it runs in prototype mode (demo account + send by hand) |
 | `APIFY_TOKEN` | optional — pulls each creator's last ~20 posts via Apify (`apidojo/tweet-scraper`, ~$0.02/account, at most every 3 days) so Influencers can rate accounts we haven't paid yet without an X login |
 
 6. Bring existing data over: in the **local** app click **Backup** (downloads a consistent snapshot — don't

@@ -98,6 +98,7 @@ tr.in td { background: var(--accent-soft); }
 .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .add { width: 26px; height: 26px; padding: 0; border-radius: 7px; font-weight: 700; line-height: 1; }
 tr.in .add { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.obtn { color: var(--accent); text-decoration: none; font-weight: 600; white-space: nowrap; }
 .price { width: 86px; text-align: right; padding: 4px 6px; }
 .price.def { color: var(--muted); }
 .x { border: none; background: none; color: var(--muted); padding: 2px 6px; }
@@ -128,7 +129,7 @@ textarea { width: 100%; min-height: 54px; resize: vertical; }
   <header>
     <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
       <h1>X Campaign Analyzer</h1>
-      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/email">Email</a><a href="/builder" class="on">Wave builder</a></nav>
+      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/outreach">Outreach</a><a href="/email">Email</a><a href="/builder" class="on">Wave builder</a></nav>
       <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle light / dark theme"></button>
     </div>
     <span class="me" id="me"></span>
@@ -444,7 +445,11 @@ function render() { renderPicker(); renderPlan(); }
 function renderWaveBar(rows) {
   const saved = PLANS.find((p) => p.id === plan.id);
   const todo = rows.filter((r) => r.c && !r.c.outreached).length;
-  const msgBtn = rows.length ? `<span class="muted">${todo ? todo + " not contacted yet" : "all contacted"}</span>` : "";
+  const o = saved?.outreach;
+  const msgBtn = o
+    ? `<span class="muted">DMs: ${o.pending ? `<b>${o.pending} need approval</b> · ` : ""}${o.queued ? o.queued + " queued · " : ""}${o.sent} sent · ${o.replied} replied${o.failed ? " · " + o.failed + " can't DM" : ""}</span>
+       <a href="/outreach?campaign=${o.campaign_id}" class="obtn">Open outreach →</a>`
+    : rows.length ? `<span class="muted">${todo ? todo + " not contacted yet" : "all contacted"}${plan.id ? "" : " · save the plan to draft their DMs"}</span>` : "";
   $("waveBar").innerHTML = saved?.campaign_id
     ? `<span>Wave created: <a href="/" data-wave="${saved.campaign_id}">${esc(saved.campaign_name || "open in Waves")} →</a></span><span style="flex:1"></span>${msgBtn}`
     : `<span class="muted">Ready? Turn this plan into a wave — it shows on Waves with each creator's DM link and the account used.</span>
