@@ -77,6 +77,7 @@ python3 server.py            # http://localhost:8787 — login is off unless GOO
 | `EMAIL_UTM_MEDIUMS` / `EMAIL_UTM_SOURCES` | optional — which UTM values mark a signup as coming from email (defaults `email,e-mail,newsletter` / `email,resend,newsletter,broadcast`); matched to a broadcast by `utm_campaign` |
 | `RESEND_API_KEY` | optional — Resend key with **Full access**; the Email tab syncs every sent email + its status every 30 min |
 | `RESEND_WEBHOOK_SECRET` | optional — signing secret (`whsec_…`) of a Resend webhook pointed at `https://<domain>/webhooks/resend` (live opens, clicks, bounces) |
+| `OUTREACH_USERS` | optional — who may open the Outreach tab and send DMs, default `dimash@nace.ai,altynay@nace.ai,maiya@nace.ai` |
 | `X_CLIENT_ID`, `X_CLIENT_SECRET` | optional — X API app (OAuth 2.0) for the Outreach tab; without them it runs in prototype mode (demo account + send by hand) |
 | `APIFY_TOKEN` | optional — pulls each creator's last ~20 posts via Apify (`apidojo/tweet-scraper`, ~$0.02/account, at most every 3 days) so Influencers can rate accounts we haven't paid yet without an X login |
 

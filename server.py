@@ -28,6 +28,20 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import requests
 
+
+def _load_dotenv():
+    """Local runs: read KEY=value lines from .env next to this file (never committed). Real env vars win.
+    Runs before the imports below because auth.py / x_dm.py read their settings at import time."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            k, sep, v = line.strip().partition("=")
+            if sep and k and not k.startswith("#") and v.strip():
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 import apify_client
 import auth
 import outreach
@@ -272,6 +286,15 @@ def apply_pack(c, campaign_id, ids, total, note=None):
 
 
 # ---------------------------------------------------------------- creators (influencers)
+
+# Who may use the Outreach tab (it sends DMs from our X accounts). Comma-separated emails.
+OUTREACH_USERS = {e.strip().lower() for e in os.environ.get(
+    "OUTREACH_USERS", "dimash@nace.ai,altynay@nace.ai,maiya@nace.ai").split(",") if e.strip()}
+
+
+def can_outreach(user):
+    return not auth.ENABLED or (user or {}).get("email", "").lower() in OUTREACH_USERS
+
 
 REFRESH_ADMINS = {e.strip().lower() for e in os.environ.get("REFRESH_ADMINS", "dimash@nace.ai").split(",") if e.strip()}
 
@@ -2164,6 +2187,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/html; charset=utf-8")
         if u.path == "/api/creators":
             return self._send(200, creators_view())
+        if (u.path in ("/outreach", "/api/outreach") or u.path.startswith("/auth/x/")) and not can_outreach(user):
+            if u.path.startswith("/api/"):
+                return self._send(403, {"error": "Outreach is limited to the outreach team."})
+            return self._send(403, "Outreach is limited to the outreach team. Ask Dimash for access.", "text/plain; charset=utf-8")
         if u.path == "/outreach":
             with open(os.path.join(HERE, "static", "outreach.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
@@ -2218,7 +2245,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
             return self._send(200, {"email": user["email"], "name": user.get("name"), "auth": auth.ENABLED,
-                                    "can_refresh": can_refresh(user)})
+                                    "can_refresh": can_refresh(user), "can_outreach": can_outreach(user)})
         if u.path == "/api/state":
             return self._send(200, state(int(q["campaign"][0])))
         if u.path == "/api/export.csv":
@@ -2398,6 +2425,8 @@ class Handler(BaseHTTPRequestHandler):
                     enqueue(r["key"], r["key"], "creator", r["handle"])
             return self._send(200, {"queued": sum(r["platform"] == "x" for r in v["creators"])})
         if path.startswith("/api/outreach/"):
+            if not can_outreach(user):
+                return self._send(403, {"error": "Outreach is limited to the outreach team."})
             b = json.loads(self._body_bytes() or b"{}")
             act, me, ids = path.rsplit("/", 1)[1], user["email"], b.get("ids") or []
             handlers = {
