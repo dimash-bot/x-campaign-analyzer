@@ -139,7 +139,11 @@ def init_db():
         c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")   # small persistent flags
         add_col("emails", "broadcast_id", "TEXT")
         for col_ in ("utm_medium", "utm_campaign", "utm_content"):   # users.ref holds utm_source
-            add_col("users", col_, "TEXT")    # from webhook events (API-synced emails are matched by subject + time)
+            add_col("users", col_, "TEXT")
+        # API depth / money / sign-in, for the Cohorts tab
+        for col_, decl in (("signin", "TEXT"), ("tokens_all", "REAL"), ("tokens_7d", "REAL"), ("last_request", "TEXT"),
+                           ("topped_up", "INTEGER"), ("spendable", "REAL")):
+            add_col("users", col_, decl)    # from webhook events (API-synced emails are matched by subject + time)
         # Gmail Postmaster Tools, one row per sending domain per day (Gmail's own numbers)
         c.execute("""CREATE TABLE IF NOT EXISTS gmail_stats (
             domain TEXT NOT NULL, day TEXT NOT NULL, spam REAL, spam_lo REAL, spam_hi REAL, domain_rep TEXT, ip_rep TEXT,
@@ -1790,6 +1794,9 @@ def import_users(csv_text, tz_name="America/Los_Angeles", replace=False):
     c_req7 = col("requests_7d") or (cols.get("requests") if c_req != cols.get("requests") else None)
     c_credit, c_method, c_ref = col("credit"), col("sign_in_method", "sign_in"), col("ref", "referral", "utm_source", "referrer")
     c_um, c_uc, c_uct = col("utm_medium"), col("utm_campaign"), col("utm_content")
+    c_si, c_tok, c_tok7 = col("sign_in_provider", "sign_in"), col("input_tokens_all_time", "input_tokens_all", "tokens_all"), col("input_tokens_last_7_days", "input_tokens_7d")
+    c_lr, c_top, c_spend = col("last_request_pt", "last_request"), col("topped_up"), col("spendable_usd", "spendable")
+    truthy = lambda v: str(v or "").strip().lower() in ("1", "true", "yes", "y")  # noqa: E731
     cell = lambda r, k: ((r.get(k) or "").strip() or None) if k else None  # noqa: E731
     ok, bad, seen, removed = 0, 0, set(), 0
     with _db_lock, db() as c:
@@ -1813,6 +1820,22 @@ def import_users(csv_text, tz_name="America/Los_Angeles", replace=False):
                        r.get(c_credit) if c_credit else None,
                        int("unconfirmed" in (r.get(c_method) or "").lower()) if c_method else 0,
                        (r.get(c_ref) or None) if c_ref else None, now(), cell(r, c_um), cell(r, c_uc), cell(r, c_uct)))
+            extra = {}
+            if c_si:
+                extra["signin"] = cell(r, c_si)
+            if c_tok:
+                extra["tokens_all"] = _num(r.get(c_tok))
+            if c_tok7:
+                extra["tokens_7d"] = _num(r.get(c_tok7))
+            if c_lr:
+                lr = _parse_time(r.get(c_lr), tz) if (r.get(c_lr) or "").strip() else None
+                extra["last_request"] = lr.isoformat() if lr else None
+            if c_top:
+                extra["topped_up"] = int(truthy(r.get(c_top)))
+            if c_spend:
+                extra["spendable"] = _num(r.get(c_spend))
+            if extra:
+                c.execute(f"UPDATE users SET {', '.join(f'{k}=?' for k in extra)} WHERE email=?", (*extra.values(), email))
             ok += 1
         if replace:
             # Safety: never wipe the table because of a file we couldn't read properly
@@ -1852,6 +1875,105 @@ def assign_waves(c):
                 cid = wid
         out[u[0]] = cid
     return out
+
+
+PERSONAL_DOMAINS = {"gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "qq.com", "icloud.com", "me.com", "yahoo.com",
+                    "proton.me", "protonmail.com", "163.com", "126.com", "foxmail.com", "mail.ru", "yandex.ru", "mail.com", "gmx.de", "web.de",
+                    "aol.com", "pm.me", "tuta.io", "tuta.com", "fastmail.com", "msn.com", "windowslive.com", "hotmail.fr", "yahoo.co.jp",
+                    "naver.com", "live.fr", "outlook.fr", "zohomail.com", "yandex.com", "inbox.ru", "bk.ru", "list.ru", "rambler.ru", "email.com"}
+COHORT_EARLY_DAYS, COHORT_MIN_USERS = 7, 20
+
+
+def email_type(e):
+    d = (e or "").rsplit("@", 1)[-1].lower()
+    if re.search(r"\.edu(\.[a-z]{2})?$|\.ac\.[a-z]{2}$|(^|\.)edu\.|univ|alumni|alumno", d):
+        return "University"
+    return "Personal" if d in PERSONAL_DOMAINS else "Company"
+
+
+def cohorts_view():
+    """Real users (as uploaded, bots already removed) grouped by wave / signup week / UTM source / UTM campaign /
+    sign-in / email type, with activation, depth, retention (last 7 days), money and cost per active user."""
+    import statistics  # noqa: F401
+    with db() as c:
+        users = [dict(r) for r in c.execute("SELECT * FROM users")]
+        wave_of = assign_waves(c)
+    if not users:
+        return {"empty": True}
+    rep_ = report(None, top=0)
+    camps = {w["id"]: w for w in rep_["campaigns"]}
+    end = max(datetime.fromisoformat(u["signed_up"]) for u in users)
+    # granted accounts start with this much credit: what untouched granted accounts still hold
+    untouched = [round(u["spendable"], 2) for u in users if u["spendable"] is not None and not (u["requests_all"] or 0)
+                 and not u["topped_up"] and (u["credit"] or "").lower().startswith("signup credit granted")]
+    start_credit = collections.Counter(untouched).most_common(1)[0][0] if untouched else None
+    has_extra = any(u["spendable"] is not None or u["tokens_all"] is not None for u in users)
+    pt = ZoneInfo("America/Los_Angeles") if ZoneInfo else timezone.utc
+    rows = []
+    for u in users:
+        su = datetime.fromisoformat(u["signed_up"])
+        lr = datetime.fromisoformat(u["last_request"]) if u.get("last_request") else None
+        local = su.astimezone(pt)
+        cid = wave_of.get(u["email"])
+        granted = (u["credit"] or "").lower().startswith("signup credit granted")
+        rows.append({"wave": camps[cid]["name"] if cid in camps else "(before the first wave)", "wave_id": cid,
+                     "week": (local - timedelta(days=local.weekday())).date().isoformat(),
+                     "source": u["ref"] or "none (no UTM)", "campaign": f"{u['ref']} · {u['utm_campaign'] or '—'}" if u["ref"] else None,
+                     "signin": u.get("signin") or "unknown", "etype": email_type(u["email"]),
+                     "age": (end - su).total_seconds() / 86400, "keys": (u["keys"] or 0) > 0, "req": u["requests_all"] or 0,
+                     "req7": u["requests_7d"] or 0, "tok": u.get("tokens_all") or 0,
+                     "span": (lr - su).total_seconds() / 86400 if lr else None, "paid": bool(u.get("topped_up")),
+                     "credit_used": (start_credit - u["spendable"]) if start_credit and granted and u.get("spendable") is not None and not u.get("topped_up") else None})
+
+    def q(v, p):
+        v = sorted(v)
+        return v[min(len(v) - 1, int(p * (len(v) - 1)))] if v else None
+
+    def metrics(G, budget=None):
+        n = len(G)
+        act = [r for r in G if r["req"] >= 1]
+        old = [r for r in G if r["age"] >= 3]
+        still = sum(1 for r in G if r["req7"] >= 1)
+        cu = [r["credit_used"] for r in G if r["credit_used"] is not None]
+        pc = lambda a, b: 100 * a / b if b else None  # noqa: E731
+        m = {"users": n, "keys_pct": pc(sum(r["keys"] for r in G), n), "act": len(act), "act_pct": pc(len(act), n),
+             "act3_pct": pc(sum(r["req"] >= 1 for r in old), len(old)), "real_pct": pc(sum(r["req"] >= 10 for r in G), n),
+             "power": sum(r["req"] >= 1000 for r in G), "still": still, "still_pct": pc(still, n),
+             "ret_pct": pc(sum(r["req7"] >= 1 for r in act), len(act)), "med_req": q([r["req"] for r in act], .5),
+             "p90_req": q([r["req"] for r in act], .9), "med_tok": q([r["tok"] for r in act], .5),
+             "med_span": q([r["span"] for r in act if r["span"] is not None], .5), "paid": sum(r["paid"] for r in G),
+             "credit_users": sum(1 for x in cu if x > 0.01), "credit_spent": round(sum(x for x in cu if x > 0), 2),
+             "requests": sum(r["req"] for r in G), "med_age": q([r["age"] for r in G], .5)}
+        if budget is not None:
+            m.update(budget=budget, cpa=budget / len(act) if act else None, cps=budget / still if still else None)
+        return m
+
+    def dim(key, sort=None):
+        g = collections.defaultdict(list)
+        for r in rows:
+            if r[key] is not None:
+                g[r[key]].append(r)
+        out = [{"cohort": k, **metrics(v)} for k, v in g.items()]
+        return sorted(out, key=sort or (lambda x: -x["users"]))
+
+    waves = []
+    for w in sorted((w for w in rep_["campaigns"] if w.get("first_post_utc")), key=lambda w: w["first_post_utc"]):
+        G = [r for r in rows if r["wave_id"] == w["id"]]
+        if G:
+            waves.append({"cohort": w["name"], "start": w["first_post_utc"], "views": w.get("views"), **metrics(G, w.get("total_budget") or 0)})
+    reqs = sorted((r["req"] for r in rows), reverse=True)
+    tot = sum(reqs) or 1
+    top = sorted(rows, key=lambda r: -r["req"])[:20]
+    return {"end": end.isoformat(), "start_credit": start_credit, "has_extra": has_extra, "n_real": len(rows),
+            "early_days": COHORT_EARLY_DAYS, "min_users": COHORT_MIN_USERS, "overall": metrics(rows),
+            "wave": waves, "week": dim("week", lambda x: x["cohort"]), "source": dim("source"), "campaign": dim("campaign"),
+            "signin": dim("signin"), "etype": dim("etype"),
+            "concentration": {"total": tot, **{f"top{k}": 100 * sum(reqs[:k]) / tot for k in (1, 5, 10, 20, 50, 100)},
+                              "curve": [round(100 * sum(reqs[:k]) / tot, 2) for k in range(1, min(200, len(reqs)) + 1)]},
+            "top20": {"waves": collections.Counter(r["wave"] for r in top).most_common(),
+                      "signin": collections.Counter(r["signin"] for r in top).most_common(),
+                      "etype": collections.Counter(r["etype"] for r in top).most_common(),
+                      "paid": sum(r["paid"] for r in top), "still": sum(r["req7"] > 0 for r in top)}}
 
 
 def user_days(c):
@@ -2241,6 +2363,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/javascript; charset=utf-8")
         if u.path == "/api/plans":
             return self._send(200, plans_list())
+        if u.path == "/cohorts":
+            with open(os.path.join(HERE, "static", "cohorts.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/api/cohorts":
+            return self._send(200, cohorts_view())
         if u.path == "/api/report":
             return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
