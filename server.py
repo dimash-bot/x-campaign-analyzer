@@ -1393,7 +1393,7 @@ def start_wave_scan(campaign_id):
         keys = [i["key"] for i in json.loads(plan["items"] or "[]")] if plan else []
         keys += [creator_key("x", r[0]) for r in c.execute(
             "SELECT DISTINCT author FROM posts WHERE campaign_id=? AND COALESCE(platform,'x')='x' AND author IS NOT NULL AND author != ''", (campaign_id,))]
-    handles = list(dict.fromkeys(k.split(":", 1)[1] for k in keys if k.startswith("x:")))
+    handles = list(dict.fromkeys(k.split(":", 1)[1] for k in keys if k.startswith("x:") and k.split(":", 1)[1] not in OWN_HANDLES))
     if not handles:
         raise ValueError("no X influencers in this wave yet")
     with _scans_lock:
