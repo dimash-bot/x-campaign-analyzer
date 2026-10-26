@@ -239,11 +239,16 @@ def fetch_worker():
                         fetched_at=?, fetch_error=NULL, day=COALESCE(day, ?) WHERE id=?""",
                     (m["author"], m["text"], m["created_at"], *[m[k] for k in auto],
                      now(), (m["created_at"] or "")[:10] or None, post_id))
+                known = c.execute("SELECT profile_at FROM creators WHERE key=?", (creator_key("x", m["author"] or ""),)).fetchone()
+                new_author = platform == "x" and m["author"] and m["author"].lower() not in OWN_HANDLES and not (known and known[0])
                 if m.get("resolved_key") and m["resolved_key"] != key:   # short link -> canonical post id
                     try:
                         c.execute("UPDATE posts SET tweet_id=?, url=? WHERE id=?", (m["resolved_key"], m["resolved_url"], post_id))
                     except sqlite3.IntegrityError:
                         pass                        # same post already tracked under its full URL
+            if new_author:   # first post of a new influencer: pull their profile, normal views and follower check now
+                ck = creator_key("x", m["author"])
+                enqueue(ck, ck, "creator", m["author"])
         except Exception as e:  # noqa: BLE001 — record any failure on the row so the UI shows it
             print(f"fetch {platform} {key} failed: {e}", flush=True)
             if "guest" in str(e).lower():
@@ -1263,6 +1268,18 @@ def wave_roster(c, campaign_id):
     head = {"plan_id": plan["id"] if plan else None, "notes": plan["notes"] if plan else None,
             "outreach": outreach.plan_stats(c).get(plan["id"]) if plan else None, "accounts": outreach_accounts(c)}
     items = json.loads(plan["items"] or "[]") if plan else []
+    # everyone who has a post in this wave is in its list too (our own accounts aside); their cost comes from the posts
+    in_plan, wave_cost = {i["key"] for i in items}, {}
+    for p in c.execute(f"""SELECT platform, author, budget FROM posts WHERE campaign_id=? AND author IS NOT NULL AND author != ''
+                           AND {INCLUDED} ORDER BY id""", (campaign_id,)):
+        k = creator_key(p["platform"], p["author"])
+        if k.split(":", 1)[1] in OWN_HANDLES:
+            continue
+        n, tot = wave_cost.get(k, (0, 0.0))
+        wave_cost[k] = (n + 1, tot + (p["budget"] or 0))
+        if k not in in_plan:
+            items.append({"key": k, "price": None, "from_posts": True})
+            in_plan.add(k)
     keys = [i["key"] for i in items]
     if not keys:
         return {**head, "creators": []}
@@ -1283,16 +1300,21 @@ def wave_roster(c, campaign_id):
         k, pr = it["key"], prof.get(it["key"], {})
         platform, _, handle = k.partition(":")
         manual = pr.get("paid_status") in PAID_STATUSES
-        # planned price: typed in the builder, else their quote, else what we paid per post before
-        price = it.get("price") if it.get("price") is not None else pr.get("quote_price") or (
-            round(spent[k][1] / spent[k][0], 2) if k in spent else None)
+        # planned price: typed in, else their quote, else what we paid per post before.
+        # Creators who are here only because of their posts: what we paid per post in this wave.
+        if it.get("from_posts"):
+            n, tot = wave_cost[k]
+            price = round(tot / n, 2) if tot else None
+        else:
+            price = it.get("price") if it.get("price") is not None else pr.get("quote_price") or (
+                round(spent[k][1] / spent[k][0], 2) if k in spent else None)
         out.append({"key": k, "platform": pr.get("platform") or platform, "handle": pr.get("handle") or handle,
                     "name": pr.get("name") or pr.get("handle") or handle, "avatar": pr.get("avatar"), "user_id": pr.get("user_id"),
                     "followers": pr.get("followers"), "median_views": pr.get("median_views"), "price": price,
                     "outreached": bool(pr.get("outreached")), "outreached_by": pr.get("outreached_by"),
                     "outreached_at": pr.get("outreached_at"), "outreach_from": pr.get("outreach_from") or None,
                     "paid_status": pr["paid_status"] if manual else ("paid" if k in paid_any else "not_paid"),
-                    "paid_status_manual": manual, "posted": posted.get(k, 0)})
+                    "paid_status_manual": manual, "posted": posted.get(k, 0), "from_posts": bool(it.get("from_posts"))})
     return {**head, "creators": out}
 
 
@@ -1368,87 +1390,6 @@ def delete_wave(campaign_id):
     for pid in pids:
         outreach.plan_deleted(pid)
     return {"ok": True}
-
-
-# ---------------------------------------------------------------- find a wave's unrecorded posts
-# Search each X influencer in the wave's list (not every post author, not our own accounts) for posts that mention us and
-# aren't tracked in any wave yet, so missed integrations can be imported with one click. Runs in the background.
-BRAND_TERMS = [t.strip() for t in os.environ.get("BRAND_TERMS", "drex,nace,naceai").split(",") if t.strip()]
-_scans, _scans_lock = {}, threading.Lock()
-
-
-def wave_scan_status(campaign_id):
-    with _scans_lock:
-        s = _scans.get(campaign_id)
-        return dict(s, found=list(s["found"]), errors=list(s["errors"])) if s else {"status": "idle"}
-
-
-def start_wave_scan(campaign_id):
-    if not apify_client.enabled():
-        raise ValueError("searching their posts needs APIFY_TOKEN on the server")
-    with db() as c:
-        if not c.execute("SELECT 1 FROM campaigns WHERE id=?", (campaign_id,)).fetchone():
-            raise ValueError("wave not found")
-        plan = c.execute("SELECT items FROM plans WHERE campaign_id=? ORDER BY id DESC LIMIT 1", (campaign_id,)).fetchone()
-        keys = [i["key"] for i in json.loads(plan["items"] or "[]")] if plan else []   # only the wave's influencer list
-    handles = list(dict.fromkeys(k.split(":", 1)[1] for k in keys if k.startswith("x:") and k.split(":", 1)[1] not in OWN_HANDLES))
-    if not handles:
-        raise ValueError("add the wave's X influencers to its list first — only they are searched")
-    with _scans_lock:
-        if _scans.get(campaign_id, {}).get("status") == "running":
-            return wave_scan_status(campaign_id)
-        _scans[campaign_id] = {"status": "running", "total": len(handles), "done": 0, "found": [], "errors": [], "started": now()}
-    threading.Thread(target=_run_wave_scan, args=(campaign_id, handles), daemon=True).start()
-    return wave_scan_status(campaign_id)
-
-
-def _run_wave_scan(campaign_id, handles):
-    from concurrent.futures import ThreadPoolExecutor
-
-    def one(h):
-        try:
-            return h, apify_client.brand_posts(h, BRAND_TERMS), None
-        except Exception as e:   # noqa: BLE001 — one creator failing shouldn't stop the scan
-            return h, [], str(e)[:160]
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        for h, posts, err in pool.map(one, handles):
-            with _scans_lock:
-                s = _scans[campaign_id]
-                s["done"] += 1
-                if err:
-                    s["errors"].append(f"@{h}: {err}")
-                s["found"].extend(p for p in posts if not p["is_reply"] and not p["is_retweet"])
-    with db() as c:
-        tracked = {r[0]: r[1] for r in c.execute(
-            "SELECT p.tweet_id, cp.name FROM posts p JOIN campaigns cp ON cp.id=p.campaign_id WHERE COALESCE(p.platform,'x')='x'")}
-        # wave start: its first recorded post, else when its influencer list was started, else when the wave was made
-        start = c.execute("SELECT min(created_at) FROM posts WHERE campaign_id=? AND created_at IS NOT NULL AND created_at != ''",
-                          (campaign_id,)).fetchone()[0] \
-            or c.execute("SELECT min(created_at) FROM plans WHERE campaign_id=?", (campaign_id,)).fetchone()[0] \
-            or c.execute("SELECT created_at FROM campaigns WHERE id=?", (campaign_id,)).fetchone()[0]
-        posted = {r[0].lower() for r in c.execute("SELECT DISTINCT author FROM posts WHERE campaign_id=? AND author IS NOT NULL", (campaign_id,))}
-        plan = c.execute("SELECT items FROM plans WHERE campaign_id=? ORDER BY id DESC LIMIT 1", (campaign_id,)).fetchone()
-        price = {i["key"]: i.get("price") for i in json.loads(plan["items"] or "[]")} if plan else {}
-        quotes = {r[0]: r[1] for r in c.execute("SELECT key, quote_price FROM creators WHERE quote_price > 0")}
-    cutoff = (datetime.fromisoformat(start) - timedelta(days=7)).isoformat() if start else ""
-    with _scans_lock:
-        s, priced = _scans[campaign_id], set()
-        seen, out = set(), []
-        for p in sorted(s["found"], key=lambda p: p["created_at"] or "", reverse=True):
-            if p["tweet_id"] in seen:
-                continue
-            seen.add(p["tweet_id"])
-            k = creator_key("x", p["author"])
-            p["tracked_in"] = tracked.get(p["tweet_id"])
-            p["before_wave"] = bool(cutoff and p["created_at"] and p["created_at"] < cutoff)
-            # suggested cost: their planned price (or quote) for one new post per creator not yet posted in this wave
-            p["suggested_cost"] = 0
-            if not p["tracked_in"] and not p["before_wave"] and p["author"].lower() not in posted and k not in priced:
-                p["suggested_cost"] = price.get(k) or quotes.get(k) or 0
-                priced.add(k)
-            out.append(p)
-        s.update(found=out, status="done", finished=now())
 
 
 def merge_builder_plans(c):
@@ -2407,8 +2348,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/javascript; charset=utf-8")
         if u.path == "/api/plans":
             return self._send(200, plans_list())
-        if u.path == "/api/waves/scan":
-            return self._send(200, wave_scan_status(int(q.get("campaign", ["0"])[0] or 0)))
         if u.path == "/api/report":
             return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
@@ -2524,11 +2463,6 @@ class Handler(BaseHTTPRequestHandler):
                                                    (b.get("notes") or "").strip() or None, user.get("email"), b.get("id")))
             except (ValueError, sqlite3.IntegrityError) as e:
                 return self._send(400, {"error": "an agency with that name already exists" if isinstance(e, sqlite3.IntegrityError) else str(e)})
-        if path == "/api/waves/scan":
-            try:
-                return self._send(200, start_wave_scan(int(json.loads(self._body_bytes() or b"{}")["campaign_id"])))
-            except (ValueError, KeyError, TypeError) as e:
-                return self._send(400, {"error": str(e)})
         if path in ("/api/waves/creators", "/api/waves/add_influencers", "/api/campaigns/rename", "/api/campaigns/delete"):
             b = json.loads(self._body_bytes() or b"{}")
             try:

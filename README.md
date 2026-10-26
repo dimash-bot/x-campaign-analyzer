@@ -104,10 +104,9 @@ API users from past waves; each creator shows the link to their X account, the a
 paid status and whether they have posted. Behind the scenes the list is a `plans` row linked to the wave (renamed and
 deleted with it). The old Wave builder page (`/builder`) now redirects to Waves.
 
-**🔍 Find their posts** (Waves tab): searches every X influencer in the wave's list (our own accounts skipped) through
-Apify for posts that mention us (`BRAND_TERMS`, default `drex,nace,naceai`; replies and reposts skipped) and lists the
-ones not recorded in any wave. Tick and import them — cost is prefilled with the planned price for one new post per
-creator. Needs `APIFY_TOKEN`; ~$0.0004 per post found.
+Everyone who has a post in a wave is in its influencer list automatically (our own `OWN_HANDLES` aside), with what we
+paid per post there; a new author gets their profile, normal views and follower check pulled into Influencers as soon as
+their post is fetched.
 
 **Outreach**: tick Outreached and type which of our X accounts contacted them (shown with a link to that account, on
 Influencers and the wave's influencer list). **Paid** column: automatic once
