@@ -106,7 +106,7 @@ code { background: var(--surface-2); border: 1px solid var(--border); border-rad
   <header>
     <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
       <h1>X Campaign Analyzer</h1>
-      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/outreach" class="on">Outreach</a><a href="/email">Email</a><a href="/builder">Wave builder</a></nav>
+      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers">Influencers</a><a href="/outreach" class="on">Outreach</a><a href="/email">Email</a></nav>
       <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle light / dark theme"></button>
     </div>
     <span class="me" id="me"></span>
@@ -284,7 +284,7 @@ function renderCampaigns() {
   const acct = D.account;
   $("campStatus").innerHTML = `<span class="badge b-${c.status}">${c.status === "active" ? "Sending on" : "Paused"}</span>
     ${c.status === "active" && acct && !acct.simulated && !D.in_window ? `<span class="badge">outside send window (${c.send_start}:00–${c.send_end}:00 ${esc(c.tz)})</span>` : ""}
-    ${c.plan_id ? `<a href="/builder?plan=${c.plan_id}" class="badge" style="text-decoration:none" title="Creators and prices come from this Wave builder plan and stay in sync with it">plan: ${esc(c.plan_name || "Wave builder")} ↗</a>` : ""}
+    ${c.plan_id ? `<a href="/${c.wave_id ? "?wave=" + c.wave_id : ""}" class="badge" style="text-decoration:none" title="Creators and prices come from this wave and stay in sync with it">wave: ${esc(c.plan_name || "Waves")} ↗</a>` : ""}
     ${acct ? `<span class="badge ${acct.simulated ? "b-sim" : ""}">from @${esc(acct.handle)}${acct.simulated ? " (demo)" : ""}</span>` : `<span class="badge b-failed">no sending account</span>`}`;
   $("toggle").textContent = c.status === "active" ? "Pause sending" : "Start sending";
 }

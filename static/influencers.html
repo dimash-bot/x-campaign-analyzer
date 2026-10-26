@@ -151,6 +151,37 @@ input.usa { width: 64px; text-align: right; padding: 3px 6px; font-size: 12.5px;
 select.paid { font-size: 12px; padding: 2px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); }
 select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--border)); font-weight: 600; }
 .auto { display: block; font-size: 10.5px; color: var(--muted); }
+/* Integrations dashboard: one card per influencer we've paid to post */
+.dash-head { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; margin-bottom: 4px; }
+.dash-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin: 10px 0 14px; }
+.dash-kpis .kpi { background: var(--surface-2); border: none; padding: 9px 12px; }
+.dash-kpis .kpi .v { font-size: 19px; }
+.icards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.icard { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.icard .top { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.icard .top img, .icard .top .ph { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: var(--surface-2); flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--muted); }
+.icard .top .nm { min-width: 0; flex: 1; }
+.icard .top a { color: var(--text); text-decoration: none; font-weight: 650; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icard .top small { color: var(--muted); font-size: 11.5px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icard .rk { font-size: 11px; font-weight: 650; color: var(--muted); background: var(--surface-2); border-radius: 99px; padding: 1px 8px; flex: none; }
+.icard .rk.top3 { color: var(--accent); background: var(--accent-soft); }
+.istats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 10px; }
+.istats div { min-width: 0; }
+.istats .l { color: var(--muted); font-size: 11px; }
+.istats .v { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.istats .v.good { color: var(--good); } .istats .v.bad { color: var(--bad); }
+.ibars { position: relative; display: flex; align-items: flex-end; gap: 3px; height: 54px; border-bottom: 1px solid var(--border); }
+.ibars a { flex: 1 1 0; max-width: 28px; min-width: 4px; background: var(--accent); border-radius: 3px 3px 0 0; opacity: .85; display: block; }
+.ibars a:hover { opacity: 1; }
+.ibars a.nov { background: var(--border); }
+.ibars .medline { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--muted); pointer-events: none; }
+.icap { color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; gap: 8px; }
+.vq { font-size: 10.5px; font-weight: 600; padding: 0 6px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
+.vq.good { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.vq.bad { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+.vq.test { background: var(--warn-bg); color: #a15c00; }
+.dash-more { margin-top: 12px; text-align: center; }
 </style>
 </head>
 <body>
@@ -158,7 +189,7 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
   <header>
     <div class="row" style="gap:14px">
       <h1>X Campaign Analyzer</h1>
-      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers" class="on">Influencers</a><a href="/outreach">Outreach</a><a href="/email">Email</a><a href="/builder">Wave builder</a></nav>
+      <nav><a href="/">Waves</a><a href="/totals">Totals</a><a href="/influencers" class="on">Influencers</a><a href="/outreach">Outreach</a><a href="/email">Email</a></nav>
       <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle light / dark theme"></button>
     </div>
     <span class="me" id="me"></span>
@@ -169,6 +200,24 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
     <code>X_AUTH_TOKEN</code> and <code>X_CT0</code> cookies of a spare X account, or set <code>APIFY_TOKEN</code> to pull their last
     20 posts through Apify (~$0.02 per account). You can also paste links to their recent posts with ✎ next to the quality badge.
   </div>
+
+  <section class="card" id="dash">
+    <div class="dash-head">
+      <h2 style="margin:0">Integrations</h2>
+      <div class="row" style="gap:8px">
+        <span class="muted" style="font-size:12.5px" id="dashScope"></span>
+        <select id="dashSort" title="Rank influencers by">
+          <option value="cpm">Cheapest CPM</option><option value="views">Most views</option><option value="avg_views">Most views per post</option>
+          <option value="er">Best ER</option><option value="vs_median">Beat their median most</option><option value="cpe">Cheapest engagement</option>
+          <option value="spent">Most spent</option><option value="n">Most integrations</option><option value="last">Most recent</option>
+        </select>
+      </div>
+    </div>
+    <p class="sub" style="margin:0">Every influencer we've paid to post, and how their posts with us did. Follows the wave, platform and search filters below; bars are each post's views (dashed line = their usual median). Click a bar to open the post.</p>
+    <div class="dash-kpis" id="dashKpis"></div>
+    <div class="icards" id="icards"></div>
+    <div class="dash-more"><button id="dashMore" hidden></button></div>
+  </section>
 
   <section class="kpis" id="kpis"></section>
 
@@ -311,6 +360,76 @@ async function api(path, body) {
   return r.json();
 }
 
+// ---- Integrations dashboard: per influencer, how the posts we paid for did (only the selected wave's posts when one is picked)
+const QL = { good: "Good", test: "Test", partial: "Profile only", bad: "Bad" };
+let dashAll = false;
+try { $("dashSort").value = localStorage.getItem("xca_dsort") || "cpm"; } catch (e) {}
+function integ(c) {
+  const w = $("wave").value, I = (c.integrations || []).filter((i) => !w || w === "__prospect" || i.wave === w);
+  if (!I.length) return null;
+  const withV = I.filter((i) => i.views), sum = (L, f) => L.reduce((a, i) => a + (f(i) || 0), 0);
+  const views = sum(I, (i) => i.views), spent = sum(I, (i) => i.cost), vSpent = sum(withV, (i) => i.cost), vEng = sum(withV, (i) => i.eng);
+  const eng = sum(I, (i) => i.eng), engSpent = sum(I.filter((i) => i.eng), (i) => i.cost);
+  const avg = withV.length ? views / withV.length : null;
+  return { c, I, n: I.length, views, spent, avg_views: avg, er: withV.length && views ? vEng / views * 100 : null,
+    cpm: vSpent && views ? vSpent / views * 1000 : null, cpe: engSpent && eng ? engSpent / eng : null,
+    vs_median: ok(avg) && c.median_views ? avg / c.median_views : null, reach: ok(avg) && c.followers ? avg / c.followers * 100 : null,
+    last: I[I.length - 1].at || "" };
+}
+function renderDash() {
+  const L = visible().map(integ).filter(Boolean);
+  const k = $("dashSort").value, asc = ["cpm", "cpe"].includes(k);
+  L.sort((a, b) => {
+    const x = a[k], y = b[k], nx = !ok(x) && typeof x !== "string", ny = !ok(y) && typeof y !== "string";
+    if (nx || ny) return nx === ny ? 0 : nx ? 1 : -1;
+    return (typeof x === "string" ? x.localeCompare(y) : x - y) * (asc ? 1 : -1);
+  });
+  $("dash").hidden = !D.creators.some((c) => c.posts);
+  const w = $("wave").value;
+  $("dashScope").textContent = w && w !== "__prospect" ? `wave: ${w}` : "all waves";
+  const tot = (f) => L.reduce((a, r) => a + (r[f] || 0), 0);
+  const all = L.flatMap((r) => r.I), wv = all.filter((i) => i.views);
+  const V = tot("views"), S = tot("spent"), vS = wv.reduce((a, i) => a + i.cost, 0), vE = wv.reduce((a, i) => a + i.eng, 0);
+  const beat = L.filter((r) => ok(r.vs_median)), repeat = L.filter((r) => r.n > 1 || r.c.waves.length > 1);
+  const kp = (l, v, s = "") => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  $("dashKpis").innerHTML = [
+    kp("Influencers", L.length, `${repeat.length} worked with more than once`),
+    kp("Integrations", all.length, `${fmt$(all.length ? S / all.length : null, 0)} avg each`),
+    kp("Spent", fmt$(S, 0)),
+    kp("Views", fmtN(V), `${fmtN(wv.length ? V / wv.length : null)} avg / post`),
+    kp("ER", pct(V ? vE / V * 100 : null), "engagements ÷ views"),
+    kp("CPM", fmt$(vS && V ? vS / V * 1000 : null), `median ${fmt$(med(L.map((r) => r.cpm)))} per influencer`),
+    kp("Beat their median", beat.length ? `${beat.filter((r) => r.vs_median >= 1).length} / ${beat.length}` : "—", "our post vs their usual post"),
+  ].join("");
+  const shown = dashAll ? L : L.slice(0, 12);
+  $("icards").innerHTML = shown.length ? shown.map((r, i) => {
+    const c = r.c, v = c.quality?.verdict || "partial", link = c.platform === "x" ? `https://x.com/${encodeURIComponent(c.handle)}` : c.post_urls[0];
+    const initials = (c.name || "?").split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toUpperCase();
+    const top = Math.max(...r.I.map((x) => x.views || 0), c.median_views || 0, 1);
+    const day = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+    const bars = r.I.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener" class="${x.views ? "" : "nov"}" style="height:${Math.max(3, (x.views || 0) / top * 100)}%"
+      title="${esc(`${day(x.at)} · ${x.wave || ""}\n${fmtN(x.views)} views · ${x.views ? pct(x.eng / x.views * 100) + " ER" : "no views yet"}\n${fmt$(x.cost, 0)}${x.views && x.cost ? " · " + fmt$(x.cost / x.views * 1000) + " CPM" : ""}`)}"></a>`).join("");
+    const st = (l, val, cls = "") => `<div><div class="l">${l}</div><div class="v ${cls}">${val}</div></div>`;
+    return `<div class="icard">
+      <div class="top">${c.avatar ? `<img src="${esc(c.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="ph">${esc(initials)}</span>`}
+        <div class="nm"><a href="${esc(link)}" target="_blank" rel="noopener">${esc(c.name)}</a>
+          <small>${c.platform === "x" ? "@" + esc(c.handle) : PLAT[c.platform]} · <span class="vq ${v}">${QL[v]}</span> · ${fmtN(c.followers)} followers</small></div>
+        <span class="rk ${i < 3 ? "top3" : ""}" title="Rank by ${esc($("dashSort").selectedOptions[0].text)}">#${i + 1}</span></div>
+      <div class="istats">
+        ${st("Integrations", r.n)}${st("Spent", fmt$(r.spent, 0))}${st("Views", fmtN(r.views))}
+        ${st("Avg views", fmtN(r.avg_views))}${st("ER", pct(r.er))}${st("CPM", fmt$(r.cpm))}
+        ${st("CPE", fmt$(r.cpe, 3))}${st("vs median", ok(r.vs_median) ? r.vs_median.toFixed(2) + "×" : "—", ok(r.vs_median) ? (r.vs_median >= 1 ? "good" : r.vs_median < 0.5 ? "bad" : "") : "")}${st("Reach", pct(r.reach, 1))}
+      </div>
+      <div class="ibars">${bars}${c.median_views ? `<span class="medline" style="bottom:${c.median_views / top * 100}%" title="their median: ${fmtN(c.median_views)}"></span>` : ""}</div>
+      <div class="icap"><span>${esc(day(r.I[0].at))}${r.n > 1 ? " → " + esc(day(r.last)) : ""}</span><span>${r.c.waves.map(esc).join(", ")}</span></div>
+    </div>`;
+  }).join("") : `<p class="muted" style="margin:0">No integrations match the filters.</p>`;
+  $("dashMore").hidden = L.length <= 12;
+  $("dashMore").textContent = dashAll ? "Show top 12" : `Show all ${L.length}`;
+}
+$("dashSort").addEventListener("change", () => { try { localStorage.setItem("xca_dsort", $("dashSort").value); } catch (e) {} renderDash(); });
+$("dashMore").onclick = () => { dashAll = !dashAll; renderDash(); };
+
 function visible() {
   const q = $("q").value.trim().toLowerCase(), w = $("wave").value, p = $("plat").value, o = $("out").value;
   return D.creators.filter((c) => (!q || `${c.name} ${c.handle}`.toLowerCase().includes(q)) && (!w || (w === "__prospect" ? c.prospect : c.waves.includes(w))) && (!p || c.platform === p)
@@ -344,6 +463,7 @@ function render() {
     + (D.creators.some((c) => c.prospect) ? `<option value="__prospect" ${cur === "__prospect" ? "selected" : ""}>No posts yet</option>` : "");
   $("loginNotice").hidden = D.x_login || D.apify || !D.creators.some((c) => c.platform === "x" && !ok(c.median_views));
 
+  renderDash();
   const V = visible();
   const k = (l, v, s = "") => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   const withMed = V.filter((c) => ok(c.vs_median));

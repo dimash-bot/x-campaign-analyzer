@@ -32,7 +32,7 @@ not signed in → /login ──▶ /auth/login ──▶ Google ──▶ /auth/
 Automated X DMs to creators through the official X API v2 (`outreach.py`, `x_dm.py`).
 
 - **Campaign** = one sending X account + a first message + an optional follow-up, a daily cap and a send window.
-  Saving a **Wave builder** plan creates its campaign and keeps it in sync: creators added → first DM drafted,
+  Adding influencers to a wave (Waves tab) creates its campaign and keeps it in sync: creators added → first DM drafted,
   removed → dropped if not messaged yet, planned price changed → waiting draft re-written (`{price}` in the template).
 - **Nothing is sent without approval.** Drafts wait in the Approval queue; approved DMs go out one at a time,
   2–5 min apart, inside the window, up to the cap. "Stop all sending" pauses every campaign.
@@ -96,13 +96,16 @@ The app exposes an MCP server at `https://<your-railway-domain>/mcp`, so Claude 
   `https://<your-railway-domain>/mcp`. Claude opens the app's sign-in (Google, @nace.ai) and an Allow screen.
 - **Claude Code**: `claude mcp add --transport http campaigns https://<your-railway-domain>/mcp`, then `/mcp` to sign in.
 
-**Wave builder** (`/builder`): pick creators from Influencers into a draft wave; it sums their expected views (our paid
-posts, else their median), prices (typed, quote, or past pay) and projects registrations / API users from past waves.
-Drafts are saved for the whole team. **Create wave →** turns a plan into a wave on Waves, which then lists those creators
-with a link to their X account, the account of ours that contacted them, paid status and whether they have posted.
+**Influencers in this wave** (Waves tab): pick creators from the Influencers database (search, quality / paid /
+outreach filters, "+ All good", "+ Top 10 by expected CPM") or paste new @handles — those are added to Influencers
+(profile + quality check in the background) and to the wave in one step. Changes save immediately. The wave sums their
+expected views (our paid posts, else their median) and prices (typed, quote, or past pay) and projects registrations /
+API users from past waves; each creator shows the link to their X account, the account of ours that contacted them,
+paid status and whether they have posted. Behind the scenes the list is a `plans` row linked to the wave (renamed and
+deleted with it). The old Wave builder page (`/builder`) now redirects to Waves.
 
 **Outreach**: tick Outreached and type which of our X accounts contacted them (shown with a link to that account, on
-Influencers, Wave builder and the wave's roster). **Paid** column: automatic once
+Influencers and the wave's influencer list). **Paid** column: automatic once
 a creator has a paid post with us, or set by hand.
 
 Tools: `list_campaigns`, `create_campaign`, `rename_campaign`, `add_posts`, `update_post`, `remove_post`,

@@ -185,6 +185,7 @@ def init_db():
         add_col("sample_posts", "source", "TEXT")   # links (pasted) | apify
         if not c.execute("SELECT 1 FROM campaigns").fetchone():
             c.execute("INSERT INTO campaigns(name, created_at) VALUES (?, ?)", ("My first campaign", now()))
+        merge_builder_plans(c)
         outreach.init_tables(c)   # X DM outreach (outreach.py)
 
 
@@ -974,6 +975,8 @@ def creators_view(enqueue_stale=True):
             r["likes_v"] += p["likes"]
             r["replies_v"] += p["replies"]
         r["post_urls"].append(p["url"])
+        r.setdefault("items", []).append({"url": p["url"], "at": p.get("created_at") or p.get("day"), "wave": names.get(p["campaign_id"]),
+                                          "views": p["views"], "eng": e, "cost": cost(p)})
     for k, pr in prof.items():   # added by hand to vet before paying: no posts with us yet
         if pr.get("prospect") and k not in rows:
             rows[k] = {"key": k, "platform": pr["platform"] or "x", "author": pr["handle"], "waves": [], "posts": 0,
@@ -1019,6 +1022,7 @@ def creators_view(enqueue_stale=True):
             "vs_median": vs_median,
             "quality": creator_quality(pr, er_pct, dv(r["replies_v"], r["likes_v"]), cpm, vs_median, expected_cpm),
             "post_urls": r["post_urls"],
+            "integrations": sorted(r.get("items", []), key=lambda i: i["at"] or ""),   # each paid post, oldest first
         })
         fresh = pr.get("profile_at") and (datetime.now(timezone.utc) - datetime.fromisoformat(pr["profile_at"])).total_seconds() < CREATOR_TTL_H * 3600
         if r["platform"] == "x" and not fresh:
@@ -1254,14 +1258,14 @@ def plan_to_wave(plan_id, email=None):
 
 
 def wave_roster(c, campaign_id):
-    """Creators planned for this wave (from its builder plan) with outreach + paid status and whether they've posted."""
+    """Creators planned for this wave with planned price, outreach + paid status and whether they've posted."""
     plan = c.execute("SELECT * FROM plans WHERE campaign_id=? ORDER BY id DESC LIMIT 1", (campaign_id,)).fetchone()
-    if not plan:
-        return None
-    items = json.loads(plan["items"] or "[]")
+    head = {"plan_id": plan["id"] if plan else None, "notes": plan["notes"] if plan else None,
+            "outreach": outreach.plan_stats(c).get(plan["id"]) if plan else None, "accounts": outreach_accounts(c)}
+    items = json.loads(plan["items"] or "[]") if plan else []
     keys = [i["key"] for i in items]
     if not keys:
-        return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": [], "accounts": outreach_accounts(c)}
+        return {**head, "creators": []}
     qs = ",".join("?" * len(keys))
     prof = {r["key"]: dict(r) for r in c.execute(f"SELECT * FROM creators WHERE key IN ({qs})", keys)}
     posted, paid_any, want, spent = {}, set(), set(keys), {}
@@ -1289,13 +1293,95 @@ def wave_roster(c, campaign_id):
                     "outreached_at": pr.get("outreached_at"), "outreach_from": pr.get("outreach_from") or None,
                     "paid_status": pr["paid_status"] if manual else ("paid" if k in paid_any else "not_paid"),
                     "paid_status_manual": manual, "posted": posted.get(k, 0)})
-    return {"plan_id": plan["id"], "plan_name": plan["name"], "creators": out, "accounts": outreach_accounts(c)}
+    return {**head, "creators": out}
 
 
 def delete_plan(plan_id):
     with _db_lock, db() as c:
         c.execute("DELETE FROM plans WHERE id=?", (int(plan_id),))
     return {"deleted": int(plan_id)}
+
+
+# ---------------------------------------------------------------- a wave's creators (planned on the Waves page)
+# Each wave keeps its creator list + planned prices in a `plans` row linked by campaign_id. It's created on first
+# use and follows the wave's name, so nobody manages plans separately; its DM campaign stays in sync (outreach.py).
+
+def wave_plan_id(c, campaign_id, email=None):
+    """The wave's plan id, creating an empty one named after the wave if it has none."""
+    row = c.execute("SELECT id FROM plans WHERE campaign_id=? ORDER BY id DESC LIMIT 1", (campaign_id,)).fetchone()
+    if row:
+        return row[0]
+    camp = c.execute("SELECT name FROM campaigns WHERE id=?", (campaign_id,)).fetchone()
+    if not camp:
+        raise ValueError("wave not found")
+    return c.execute("""INSERT INTO plans(name, items, created_at, created_by, updated_at, updated_by, campaign_id)
+                        VALUES (?, '[]', ?, ?, ?, ?, ?)""", (camp[0], now(), email, now(), email, campaign_id)).lastrowid
+
+
+def set_wave_creators(campaign_id, add=(), remove=(), notes=None, email=None):
+    """Add / remove creators (keys like "x:handle") in a wave and optionally set its deal notes."""
+    with _db_lock, db() as c:
+        pid = wave_plan_id(c, int(campaign_id), email)
+        row = c.execute("SELECT items, notes FROM plans WHERE id=?", (pid,)).fetchone()
+        items, drop = json.loads(row["items"] or "[]"), {str(k) for k in remove or ()}
+        items = [i for i in items if i.get("key") not in drop]
+        have = {i["key"] for i in items}
+        for k in add or ():
+            k = str(k or "").strip()
+            if k and k not in have:
+                items.append({"key": k, "price": None})
+                have.add(k)
+        c.execute("UPDATE plans SET items=?, notes=?, updated_at=?, updated_by=? WHERE id=?",
+                  (json.dumps(items), row["notes"] if notes is None else (notes.strip() or None), now(), email, pid))
+    outreach.sync_plan(pid, email)          # its DM campaign: new creators get a draft for approval
+    return {"plan_id": pid, "creators": len(items)}
+
+
+def add_wave_influencers(campaign_id, text, email=None):
+    """New influencers typed on the Waves page: added to Influencers (profile + quality check run in the
+    background, same as the Influencers tab) and put straight into this wave."""
+    r = add_prospects(text)
+    keys = [creator_key("x", h) for h in r["added"] + r["already_listed"]]
+    return {**r, **set_wave_creators(campaign_id, add=keys, email=email)}
+
+
+def rename_wave(campaign_id, name, email=None):
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    with _db_lock, db() as c:
+        c.execute("UPDATE campaigns SET name=? WHERE id=?", (name, campaign_id))
+        pids = [r[0] for r in c.execute("SELECT id FROM plans WHERE campaign_id=?", (campaign_id,))]
+        c.execute("UPDATE plans SET name=?, updated_at=?, updated_by=? WHERE campaign_id=?", (name, now(), email, campaign_id))
+    for pid in pids:
+        outreach.sync_plan(pid, email)      # renames its DM campaign too
+    return {"ok": True}
+
+
+def delete_wave(campaign_id):
+    """Delete a wave with its posts, days and creator list (its DM campaign goes too unless DMs were sent)."""
+    with _db_lock, db() as c:
+        pids = [r[0] for r in c.execute("SELECT id FROM plans WHERE campaign_id=?", (campaign_id,))]
+        c.execute("PRAGMA foreign_keys=ON")
+        c.execute("DELETE FROM campaigns WHERE id=?", (campaign_id,))
+        c.execute("DELETE FROM plans WHERE campaign_id=?", (campaign_id,))
+    for pid in pids:
+        outreach.plan_deleted(pid)
+    return {"ok": True}
+
+
+def merge_builder_plans(c):
+    """One-off, from when plans lived on a separate Wave builder page: every plan that was never turned into a
+    wave becomes one (or joins the wave of the same name that has no creator list yet)."""
+    if c.execute("SELECT 1 FROM kv WHERE k='plans_merged'").fetchone():
+        return
+    for p in c.execute("SELECT id, name, created_at FROM plans WHERE campaign_id IS NULL ORDER BY id").fetchall():
+        same = c.execute("""SELECT id FROM campaigns WHERE name=? AND id NOT IN
+                            (SELECT campaign_id FROM plans WHERE campaign_id IS NOT NULL)""", (p["name"],)).fetchone()
+        cid = same[0] if same else c.execute("INSERT INTO campaigns(name, created_at) VALUES (?, ?)",
+                                             (p["name"], p["created_at"] or now())).lastrowid
+        c.execute("UPDATE plans SET campaign_id=? WHERE id=?", (cid, p["id"]))
+    c.execute("INSERT OR REPLACE INTO kv(k, v) VALUES ('plans_merged', '1')")
 
 
 # ---------------------------------------------------------------- email analytics (Resend)
@@ -2233,9 +2319,8 @@ class Handler(BaseHTTPRequestHandler):
                                               q.get("system", ["0"])[0] == "1", q.get("broadcast", [""])[0] or None))
         if u.path == "/api/agencies":
             return self._send(200, agencies_view())
-        if u.path == "/builder":
-            with open(os.path.join(HERE, "static", "builder.html"), "rb") as f:
-                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if u.path == "/builder":      # Wave builder now lives on Waves
+            return self._redirect("/")
         if u.path == "/colresize.js":
             with open(os.path.join(HERE, "static", "colresize.js"), "rb") as f:
                 return self._send(200, f.read(), "text/javascript; charset=utf-8")
@@ -2356,6 +2441,20 @@ class Handler(BaseHTTPRequestHandler):
                                                    (b.get("notes") or "").strip() or None, user.get("email"), b.get("id")))
             except (ValueError, sqlite3.IntegrityError) as e:
                 return self._send(400, {"error": "an agency with that name already exists" if isinstance(e, sqlite3.IntegrityError) else str(e)})
+        if path in ("/api/waves/creators", "/api/waves/add_influencers", "/api/campaigns/rename", "/api/campaigns/delete"):
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                if path == "/api/waves/creators":
+                    r = set_wave_creators(int(b["campaign_id"]), b.get("add") or [], b.get("remove") or [], b.get("notes"), user.get("email"))
+                elif path == "/api/waves/add_influencers":
+                    r = add_wave_influencers(int(b["campaign_id"]), b.get("text", ""), user.get("email"))
+                elif path == "/api/campaigns/rename":
+                    r = rename_wave(int(b["id"]), b.get("name"), user.get("email"))
+                else:
+                    r = delete_wave(int(b["id"]))
+                return self._send(200, r)
+            except (ValueError, KeyError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/plans/save":
             b = json.loads(self._body_bytes() or b"{}")
             try:
@@ -2480,16 +2579,9 @@ class Handler(BaseHTTPRequestHandler):
                 cur = c.execute("INSERT INTO campaigns(name, created_at) VALUES (?, ?)", (b["name"].strip(), now()))
                 return self._send(200, {"id": cur.lastrowid})
 
-            elif path == "/api/campaigns/rename":
-                c.execute("UPDATE campaigns SET name=? WHERE id=?", (b["name"].strip(), b["id"]))
-
             elif path == "/api/campaigns/other_spend":
                 c.execute("UPDATE campaigns SET other_spend=?, other_note=? WHERE id=?",
                           (float(b.get("other_spend") or 0), b.get("other_note"), b["id"]))
-
-            elif path == "/api/campaigns/delete":
-                c.execute("PRAGMA foreign_keys=ON")
-                c.execute("DELETE FROM campaigns WHERE id=?", (b["id"],))
 
             elif path == "/api/posts":
                 cid = b["campaign_id"]

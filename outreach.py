@@ -473,8 +473,8 @@ def view(campaign_id=None):
         if not camp:
             return out
         if camp.get("plan_id"):
-            pl = c.execute("SELECT name FROM plans WHERE id=?", (camp["plan_id"],)).fetchone()
-            camp["plan_name"] = pl[0] if pl else None
+            pl = c.execute("SELECT name, campaign_id FROM plans WHERE id=?", (camp["plan_id"],)).fetchone()
+            camp["plan_name"], camp["wave_id"] = (pl[0], pl[1]) if pl else (None, None)
         out["campaign"] = camp
         out["in_window"] = _in_window(camp)
         acct = next((a for a in accounts if a["user_id"] == camp["account_id"]), None)
