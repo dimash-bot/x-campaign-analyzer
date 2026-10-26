@@ -71,3 +71,29 @@ def newest_followers(handle, n=200):
             "bio": (u.get("description") or "").strip(),
         })
     return out[:n]
+
+
+def brand_posts(handle, terms, max_items=20):
+    """Posts by @handle that mention any of `terms` (X search, newest first) — to find integrations we never
+    recorded. Replies and reposts are flagged so callers can drop them. ~$0.0004 per post returned."""
+    q = f"from:{handle} (" + " OR ".join(terms) + ")"
+    r = requests.post(
+        f"https://api.apify.com/v2/acts/{ACTOR}/run-sync-get-dataset-items",
+        params={"token": os.environ["APIFY_TOKEN"], "timeout": 180, "maxTotalChargeUsd": 0.03},
+        json={"searchTerms": [q], "maxItems": max_items, "sort": "Latest"}, timeout=200)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Apify HTTP {r.status_code}: {r.text[:160]}")
+    out = []
+    for t in r.json():
+        if not isinstance(t, dict) or not t.get("id") or t.get("noResults"):
+            continue
+        out.append({
+            "tweet_id": str(t["id"]), "author": (t.get("author") or {}).get("userName") or handle,
+            "url": t.get("url") or f"https://x.com/{handle}/status/{t['id']}",
+            "created_at": _iso(t.get("createdAt")), "text": (t.get("fullText") or t.get("text") or "").strip(),
+            "is_reply": bool(t.get("isReply")), "is_retweet": bool(t.get("isRetweet")), "is_quote": bool(t.get("isQuote")),
+            "quoted": ((t.get("quote") or {}).get("author") or {}).get("userName"),
+            "views": int(t.get("viewCount") or 0), "likes": int(t.get("likeCount") or 0),
+            "retweets": int(t.get("retweetCount") or 0), "replies": int(t.get("replyCount") or 0),
+        })
+    return out

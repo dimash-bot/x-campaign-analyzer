@@ -1370,6 +1370,89 @@ def delete_wave(campaign_id):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- find a wave's unrecorded posts
+# Search each of the wave's X creators (its influencer list + authors of its posts) for posts that mention us and
+# aren't tracked in any wave yet, so missed integrations can be imported with one click. Runs in the background.
+BRAND_TERMS = [t.strip() for t in os.environ.get("BRAND_TERMS", "drex,nace,naceai").split(",") if t.strip()]
+_scans, _scans_lock = {}, threading.Lock()
+
+
+def wave_scan_status(campaign_id):
+    with _scans_lock:
+        s = _scans.get(campaign_id)
+        return dict(s, found=list(s["found"]), errors=list(s["errors"])) if s else {"status": "idle"}
+
+
+def start_wave_scan(campaign_id):
+    if not apify_client.enabled():
+        raise ValueError("searching their posts needs APIFY_TOKEN on the server")
+    with db() as c:
+        if not c.execute("SELECT 1 FROM campaigns WHERE id=?", (campaign_id,)).fetchone():
+            raise ValueError("wave not found")
+        plan = c.execute("SELECT items FROM plans WHERE campaign_id=? ORDER BY id DESC LIMIT 1", (campaign_id,)).fetchone()
+        keys = [i["key"] for i in json.loads(plan["items"] or "[]")] if plan else []
+        keys += [creator_key("x", r[0]) for r in c.execute(
+            "SELECT DISTINCT author FROM posts WHERE campaign_id=? AND COALESCE(platform,'x')='x' AND author IS NOT NULL AND author != ''", (campaign_id,))]
+    handles = list(dict.fromkeys(k.split(":", 1)[1] for k in keys if k.startswith("x:")))
+    if not handles:
+        raise ValueError("no X influencers in this wave yet")
+    with _scans_lock:
+        if _scans.get(campaign_id, {}).get("status") == "running":
+            return wave_scan_status(campaign_id)
+        _scans[campaign_id] = {"status": "running", "total": len(handles), "done": 0, "found": [], "errors": [], "started": now()}
+    threading.Thread(target=_run_wave_scan, args=(campaign_id, handles), daemon=True).start()
+    return wave_scan_status(campaign_id)
+
+
+def _run_wave_scan(campaign_id, handles):
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(h):
+        try:
+            return h, apify_client.brand_posts(h, BRAND_TERMS), None
+        except Exception as e:   # noqa: BLE001 — one creator failing shouldn't stop the scan
+            return h, [], str(e)[:160]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for h, posts, err in pool.map(one, handles):
+            with _scans_lock:
+                s = _scans[campaign_id]
+                s["done"] += 1
+                if err:
+                    s["errors"].append(f"@{h}: {err}")
+                s["found"].extend(p for p in posts if not p["is_reply"] and not p["is_retweet"])
+    with db() as c:
+        tracked = {r[0]: r[1] for r in c.execute(
+            "SELECT p.tweet_id, cp.name FROM posts p JOIN campaigns cp ON cp.id=p.campaign_id WHERE COALESCE(p.platform,'x')='x'")}
+        # wave start: its first recorded post, else when its influencer list was started, else when the wave was made
+        start = c.execute("SELECT min(created_at) FROM posts WHERE campaign_id=? AND created_at IS NOT NULL AND created_at != ''",
+                          (campaign_id,)).fetchone()[0] \
+            or c.execute("SELECT min(created_at) FROM plans WHERE campaign_id=?", (campaign_id,)).fetchone()[0] \
+            or c.execute("SELECT created_at FROM campaigns WHERE id=?", (campaign_id,)).fetchone()[0]
+        posted = {r[0].lower() for r in c.execute("SELECT DISTINCT author FROM posts WHERE campaign_id=? AND author IS NOT NULL", (campaign_id,))}
+        plan = c.execute("SELECT items FROM plans WHERE campaign_id=? ORDER BY id DESC LIMIT 1", (campaign_id,)).fetchone()
+        price = {i["key"]: i.get("price") for i in json.loads(plan["items"] or "[]")} if plan else {}
+        quotes = {r[0]: r[1] for r in c.execute("SELECT key, quote_price FROM creators WHERE quote_price > 0")}
+    cutoff = (datetime.fromisoformat(start) - timedelta(days=7)).isoformat() if start else ""
+    with _scans_lock:
+        s, priced = _scans[campaign_id], set()
+        seen, out = set(), []
+        for p in sorted(s["found"], key=lambda p: p["created_at"] or "", reverse=True):
+            if p["tweet_id"] in seen:
+                continue
+            seen.add(p["tweet_id"])
+            k = creator_key("x", p["author"])
+            p["tracked_in"] = tracked.get(p["tweet_id"])
+            p["before_wave"] = bool(cutoff and p["created_at"] and p["created_at"] < cutoff)
+            # suggested cost: their planned price (or quote) for one new post per creator not yet posted in this wave
+            p["suggested_cost"] = 0
+            if not p["tracked_in"] and not p["before_wave"] and p["author"].lower() not in posted and k not in priced:
+                p["suggested_cost"] = price.get(k) or quotes.get(k) or 0
+                priced.add(k)
+            out.append(p)
+        s.update(found=out, status="done", finished=now())
+
+
 def merge_builder_plans(c):
     """One-off, from when plans lived on a separate Wave builder page: every plan that was never turned into a
     wave becomes one (or joins the wave of the same name that has no creator list yet)."""
@@ -2326,6 +2409,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "text/javascript; charset=utf-8")
         if u.path == "/api/plans":
             return self._send(200, plans_list())
+        if u.path == "/api/waves/scan":
+            return self._send(200, wave_scan_status(int(q.get("campaign", ["0"])[0] or 0)))
         if u.path == "/api/report":
             return self._send(200, report(None, top=int(parse_qs(u.query).get("top", ["0"])[0])))
         if u.path == "/api/me":
@@ -2441,6 +2526,11 @@ class Handler(BaseHTTPRequestHandler):
                                                    (b.get("notes") or "").strip() or None, user.get("email"), b.get("id")))
             except (ValueError, sqlite3.IntegrityError) as e:
                 return self._send(400, {"error": "an agency with that name already exists" if isinstance(e, sqlite3.IntegrityError) else str(e)})
+        if path == "/api/waves/scan":
+            try:
+                return self._send(200, start_wave_scan(int(json.loads(self._body_bytes() or b"{}")["campaign_id"])))
+            except (ValueError, KeyError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
         if path in ("/api/waves/creators", "/api/waves/add_influencers", "/api/campaigns/rename", "/api/campaigns/delete"):
             b = json.loads(self._body_bytes() or b"{}")
             try:

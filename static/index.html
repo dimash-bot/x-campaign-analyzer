@@ -154,6 +154,11 @@ tr.in .addb { background: var(--accent); border-color: var(--accent); color: var
 .q.bad { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
 .q.test { background: var(--warn-bg); color: #a15c00; }
 td.bad { color: var(--bad); } td.good { color: var(--good); }
+#scanTable td { vertical-align: top; }
+#scanTable td.txt { white-space: normal; min-width: 260px; max-width: 420px; font-size: 12.5px; color: var(--muted); }
+#scanTable td.txt a { color: var(--text); font-weight: 600; text-decoration: none; }
+#scanTable tr.off td { opacity: .55; }
+#scanTable input.scost { width: 72px; text-align: right; padding: 3px 6px; border-radius: 6px; }
 .other { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 </style>
 </head>
@@ -205,6 +210,7 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
     <div class="row" style="margin-top:12px">
       <button id="pickBtn" class="primary">+ Add from Influencers</button>
       <button id="newInfBtn">+ New influencer</button>
+      <button id="scanBtn" title="Search each influencer's X posts for ones that mention us but aren't recorded in any wave (Apify, ~$0.0004 per post found)">🔍 Find their posts</button>
       <span style="flex:1"></span>
       <input id="waveNotes" placeholder="Deal notes — terms, timing, agency…" style="flex:1 1 280px;min-width:200px">
     </div>
@@ -215,6 +221,22 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
         <button id="newInfOk" class="primary">Add to Influencers &amp; this wave</button>
         <button id="newInfCancel">Close</button>
         <span id="newInfMsg" class="hint" style="margin:0"></span>
+      </div>
+    </div>
+    <div id="scanPanel" class="subpanel" hidden>
+      <div class="row" style="margin-bottom:8px">
+        <b style="font-size:13.5px">Their posts that mention us</b>
+        <span id="scanMsg" class="hint" style="margin:0"></span>
+        <span style="flex:1"></span>
+        <button id="scanImport" class="primary" disabled>Import selected</button>
+        <button id="scanClose">Close</button>
+      </div>
+      <div class="table-wrap pickwrap">
+        <table id="scanTable">
+          <thead><tr><th class="l"><input type="checkbox" id="scanAll" title="Select all importable"></th><th class="l">Creator</th><th class="l">Posted</th><th class="l">Post</th>
+            <th>Views</th><th>Likes</th><th title="Cost to record — prefilled with their planned price for one new post">Cost $</th><th class="l">Status</th></tr></thead>
+          <tbody id="scanRows"></tbody>
+        </table>
       </div>
     </div>
     <div id="picker" class="subpanel" hidden>
@@ -597,6 +619,64 @@ function renderPicker() {
   $("pickCount").textContent = `${V.length} of ${CR.length} creators shown · ${(S.roster?.creators || []).length} in this wave`;
 }
 
+// ---- Find posts we never recorded: search each influencer's X posts for ones that mention us (server runs it via Apify)
+let SCAN = null, scanTimer = null;
+const scanImportable = (p) => !p.tracked_in;
+function renderScan() {
+  const s = SCAN || { status: "idle" };
+  const F = s.found || [];
+  if (s.status === "running") $("scanMsg").textContent = `Searching ${s.done} / ${s.total} influencers… ${F.length} post${F.length === 1 ? "" : "s"} so far`;
+  else if (s.status === "done") $("scanMsg").textContent = `${F.filter(scanImportable).length} not recorded yet · ${F.filter((p) => p.tracked_in).length} already in a wave · searched ${s.total} influencer${s.total === 1 ? "" : "s"}`
+    + (s.errors?.length ? ` · ${s.errors.length} failed` : "");
+  else $("scanMsg").textContent = "";
+  const day = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
+  $("scanRows").innerHTML = s.status !== "done" ? `<tr><td colspan="8" class="muted" style="text-align:center;padding:16px">${s.status === "running" ? "Searching their posts…" : "Nothing yet."}</td></tr>`
+    : F.length ? F.map((p, i) => {
+      const can = scanImportable(p), on = can && !p.before_wave;
+      return `<tr class="${can ? "" : "off"}">
+        <td class="l"><input type="checkbox" data-scan="${i}" ${can ? "" : "disabled"} ${on ? "checked" : ""}></td>
+        <td class="l">@${esc(p.author)}</td>
+        <td class="l">${day(p.created_at)}</td>
+        <td class="txt"><a href="${esc(p.url)}" target="_blank" rel="noopener">open ↗</a> ${esc((p.text || "").slice(0, 180))}${(p.text || "").length > 180 ? "…" : ""}</td>
+        <td>${fmtN(p.views)}</td><td>${fmtN(p.likes)}</td>
+        <td>${can ? `<input class="scost" data-scost="${i}" inputmode="decimal" value="${p.suggested_cost || ""}" placeholder="0">` : ""}</td>
+        <td class="l">${p.tracked_in ? `<span class="muted">in ${esc(p.tracked_in)}</span>` : p.before_wave ? `<span class="muted">before this wave</span>` : `<span class="ok">not recorded</span>`}</td>
+      </tr>`;
+    }).join("") + (s.errors?.length ? `<tr><td colspan="8" class="err">${s.errors.map(esc).join("<br>")}</td></tr>` : "")
+    : `<tr><td colspan="8" class="muted" style="text-align:center;padding:16px">No posts mentioning us found.${s.errors?.length ? "<br>" + s.errors.map(esc).join("<br>") : ""}</td></tr>`;
+  scanCount();
+}
+function scanCount() {
+  const n = document.querySelectorAll("#scanRows input[data-scan]:checked").length;
+  $("scanImport").disabled = !n;
+  $("scanImport").textContent = n ? `Import ${n} into this wave` : "Import selected";
+}
+async function pollScan(id) {
+  clearTimeout(scanTimer);
+  if (id !== cid) return;
+  SCAN = await api("/api/waves/scan?campaign=" + id);
+  renderScan();
+  if (SCAN.status === "running") scanTimer = setTimeout(() => pollScan(id), 2000);
+}
+$("scanBtn").onclick = async () => {
+  $("scanPanel").hidden = false;
+  try { SCAN = await api("/api/waves/scan", { campaign_id: cid }); renderScan(); pollScan(cid); }
+  catch (e) { $("scanMsg").textContent = "Couldn't search: " + e.message.replace(/^\{"error": "|"\}$/g, "").slice(0, 160); }
+  $("scanPanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+};
+$("scanClose").onclick = () => { $("scanPanel").hidden = true; };
+$("scanRows").addEventListener("change", scanCount);
+$("scanAll").addEventListener("change", (e) => { document.querySelectorAll("#scanRows input[data-scan]:not(:disabled)").forEach((cb) => { cb.checked = e.target.checked; }); scanCount(); });
+$("scanImport").onclick = (ev) => busy(ev.target, "Importing…", async () => {
+  const items = [...document.querySelectorAll("#scanRows input[data-scan]:checked")].map((cb) => {
+    const p = SCAN.found[Number(cb.dataset.scan)], c = document.querySelector(`input[data-scost="${cb.dataset.scan}"]`);
+    return { url: p.url, budget: Number(String(c?.value || "0").replace(/[$,\s]/g, "")) || 0, note: "found by search" };
+  });
+  const r = await api("/api/posts", { campaign_id: cid, items });
+  toast(`Imported ${r.added} post${r.added === 1 ? "" : "s"}${r.skipped ? ` · ${r.skipped} were already here` : ""} — fetching metrics`);
+  SCAN.found.forEach((p) => { if (items.some((it) => it.url === p.url)) p.tracked_in = S.campaigns.find((c) => c.id === cid)?.name || "this wave"; });
+  renderScan(); await load();
+});
 $("pickBtn").onclick = () => { $("picker").hidden = !$("picker").hidden; if (!$("picker").hidden) { renderPicker(); $("pq").focus(); } };
 $("pickClose").onclick = () => { $("picker").hidden = true; };
 $("newInfBtn").onclick = () => { $("newInf").hidden = !$("newInf").hidden; $("newInfMsg").textContent = ""; if (!$("newInf").hidden) $("newInfText").focus(); };
@@ -887,7 +967,7 @@ document.addEventListener("change", async (ev) => {
     picked.clear();
     if (el.checked) S.posts.forEach((p) => picked.add(p.id));
     render();
-  } else if (el.id === "campaign") { cid = Number(el.value); picked.clear(); $("newInf").hidden = true; $("newInfMsg").textContent = ""; load(); }
+  } else if (el.id === "campaign") { cid = Number(el.value); picked.clear(); $("newInf").hidden = true; $("newInfMsg").textContent = ""; $("scanPanel").hidden = true; SCAN = null; load(); }
 });
 
 document.addEventListener("click", async (ev) => {
