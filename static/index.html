@@ -132,11 +132,6 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .modal input { width: 100%; margin-bottom: 14px; }
 .modal .row { justify-content: flex-end; }
 td input.note { width: 170px; text-align: left; }
-.fk { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; margin-bottom: 10px; }
-.fk .kpi { background: var(--surface-2); border: none; padding: 9px 12px; }
-.fk .kpi .v { font-size: 18px; }
-.fk .kpi.hl { box-shadow: none; background: var(--accent-soft); }
-.fk .s.up { color: var(--good); } .fk .s.down { color: var(--bad); }
 .warns { background: var(--warn-bg); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; margin: 0 0 10px; }
 .warns:empty { display: none; }
 .warns div + div { margin-top: 3px; }
@@ -186,17 +181,10 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
       <span id="rosterDm" class="muted" style="font-size:12.5px"></span>
     </div>
     <p class="muted" id="rosterSub" style="font-size:12.5px;margin:4px 0 10px"></p>
-    <div id="fcWrap">
-      <div class="row" style="margin-bottom:8px">
-        <span class="muted" style="font-size:12.5px">Forecast — convert views with</span>
-        <select id="bench" title="Which past results to use for registrations and API users"></select>
-      </div>
-      <div class="fk" id="fc"></div>
-      <div class="warns" id="warns"></div>
-    </div>
+    <div class="warns" id="warns"></div>
     <div class="table-wrap">
       <table id="roster">
-        <thead><tr><th class="l">Creator</th><th>Followers</th><th title="Average views of their paid posts with us, else their median">Exp. views</th><th>Planned $</th><th>Exp. CPM</th><th>Exp. regs</th>
+        <thead><tr><th class="l">Creator</th><th>Followers</th><th title="Average views of their paid posts with us, else their median">Exp. views</th><th>Planned $</th><th>Exp. CPM</th>
           <th class="l">Outreached</th><th class="l">Contacted from</th><th class="l">Account</th><th class="l">Paid</th><th class="l">Post in this wave</th><th></th></tr></thead>
         <tbody id="rosterRows"></tbody>
         <tfoot id="rosterFoot"></tfoot>
@@ -450,12 +438,12 @@ function aggregateDays() {
   return Object.values(m).sort((a, b) => a.day.localeCompare(b.day));
 }
 
-// ---- Influencers in this wave: who's planned, at what price, the forecast, and adding creators (from the
+// ---- Influencers in this wave: who is in it, at what price, and adding creators (from the
 // Influencers database, or brand-new handles). Saved straight away; the wave's DM campaign follows (Outreach).
 const ok = (n) => n != null && isFinite(n);
 const QRANK = { good: 3, test: 2, partial: 1, bad: 0 };
 const QLABEL = { good: "Good", test: "Test", partial: "Profile only", bad: "Bad" };
-let CR = null, byKey = {}, REP = null, ACCTS = [];   // Influencers database + per-wave results (for the forecast)
+let CR = null, byKey = {}, ACCTS = [];   // Influencers database
 let psort = { key: "added_at", dir: "desc" };
 try { psort = JSON.parse(localStorage.getItem("xca_psort")) || psort; } catch (e) {}
 
@@ -472,20 +460,9 @@ function enrich(c) {
   return c;
 }
 async function loadCreators() {
-  const [cr, rep] = await Promise.all([api("/api/creators"), REP ? Promise.resolve(REP) : api("/api/report")]);
-  CR = cr.creators.map(enrich); byKey = Object.fromEntries(CR.map((c) => [c.key, c])); ACCTS = cr.accounts || []; REP = rep;
-  const waves = REP.campaigns.filter((w) => w.registrations);
-  let saved = ""; try { saved = localStorage.getItem("xca_bench") || ""; } catch (e) {}
-  $("bench").innerHTML = `<option value="all">All waves (${ok(REP.totals.regs_per_1k_views) ? REP.totals.regs_per_1k_views.toFixed(2) : "—"} regs / 1K views)</option>` +
-    waves.map((w) => `<option value="${w.id}">${esc(w.name)} (${ok(w.regs_per_1k_views) ? w.regs_per_1k_views.toFixed(2) : "—"} / 1K)</option>`).join("");
-  if ([...$("bench").options].some((o) => o.value === saved)) $("bench").value = saved;
+  const cr = await api("/api/creators");
+  CR = cr.creators.map(enrich); byKey = Object.fromEntries(CR.map((c) => [c.key, c])); ACCTS = cr.accounts || [];
   renderRoster(); if (!$("picker").hidden) renderPicker();
-}
-function benchmark() {
-  if (!REP) return null;
-  const v = $("bench").value, src = v === "all" ? REP.totals : REP.campaigns.find((w) => String(w.id) === v);
-  return src ? { name: v === "all" ? "all waves" : src.name, r1k: src.regs_per_1k_views, r2a: src.reg_to_api_pct,
-                 cpr: src.cost_per_registration, cpa: src.cost_per_api_user, cpm: src.avg_cpm } : null;
 }
 const inWave = (k) => (S.roster?.creators || []).some((c) => c.key === k);
 async function waveCreators(body) {
@@ -494,7 +471,7 @@ async function waveCreators(body) {
 }
 
 function renderRoster() {
-  const R = S.roster || { creators: [] }, B = benchmark();
+  const R = S.roster || { creators: [] };
   const L = R.creators, d = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
   const contacted = L.filter((c) => c.outreached).length, posted = L.filter((c) => c.posted).length;
   $("rosterSub").textContent = L.length ? `${L.length} creator${L.length === 1 ? "" : "s"} · ${contacted} contacted · ${L.filter((c) => c.paid_status === "paid").length} paid · ${posted} posted.`
@@ -506,41 +483,16 @@ function renderRoster() {
 
   const rows = L.map((c) => {
     const e = byKey[c.key], views = e?.exp_views ?? null, price = ok(c.price) ? c.price : null;
-    return { c, e, views, price, cpm: ok(price) && views ? price / views * 1000 : null, regs: B && ok(B.r1k) && views ? views / 1000 * B.r1k : null };
+    return { c, e, views, price, cpm: ok(price) && views ? price / views * 1000 : null };
   });
-  // Forecast over the planned creators
   const sum = (f) => rows.reduce((s, r) => s + (ok(f(r)) ? f(r) : 0), 0);
   const priced = rows.filter((r) => ok(r.price) && r.views);
   const budget = sum((r) => r.price), views = sum((r) => r.views);
-  const pB = priced.reduce((s, r) => s + r.price, 0), pV = priced.reduce((s, r) => s + r.views, 0);
-  const cpm = pV ? pB / pV * 1000 : null, regs = B && ok(B.r1k) ? views / 1000 * B.r1k : null;
-  const apiN = ok(regs) && ok(B?.r2a) ? regs * B.r2a / 100 : null, pR = B && ok(B.r1k) ? pV / 1000 * B.r1k : null;
-  const cpr = pR ? pB / pR : null, cpa = pR && ok(B?.r2a) && B.r2a ? pB / (pR * B.r2a / 100) : null;
-  const vs = (val, ref) => {
-    if (!ok(val) || !ok(ref) || !ref) return "";
-    const dd = (val / ref - 1) * 100;
-    return `<span class="${Math.abs(dd) < 3 ? "" : dd < 0 ? "up" : "down"}">${dd > 0 ? "+" : ""}${dd.toFixed(0)}% vs ${esc(B.name)}</span>`;
-  };
-  const k = (l, v, sHtml = "", cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sHtml}</div></div>`;
-  $("fcWrap").hidden = !L.length;
-  $("fc").innerHTML = !L.length ? "" : [
-    k("Planned budget", fmt$(budget, 0), `${fmt$(div(budget, L.length), 0)} avg / creator`),
-    k("Expected views", fmtN(views), `${rows.filter((r) => r.e && !r.e.posts).length} new · ${rows.filter((r) => r.e?.posts).length} repeat`),
-    k("Expected CPM", fmt$(cpm), vs(cpm, B?.cpm)),
-    k("Expected regs", ok(regs) ? Math.round(regs).toLocaleString() : "—", B && ok(B.r1k) ? `${B.r1k.toFixed(2)} per 1K views` : "", "hl"),
-    k("$ / registration", fmt$(cpr), vs(cpr, B?.cpr), "hl"),
-    k("Expected API users", ok(apiN) ? Math.round(apiN).toLocaleString() : "—", ok(B?.r2a) ? `${B.r2a.toFixed(1)}% of regs` : ""),
-    k("$ / API user", fmt$(cpa), vs(cpa, B?.cpa), "hl"),
-  ].join("");
-  const W = [], h = (r) => "@" + esc(r.c.handle);
-  const bad = rows.filter((r) => r.e?.quality?.verdict === "bad"), noV = rows.filter((r) => CR && !r.views), noP = rows.filter((r) => !ok(r.price));
-  if (bad.length) W.push(`⚠ ${bad.length} rated bad: ${bad.map(h).join(", ")}`);
-  if (noV.length) W.push(`No views data for ${noV.map(h).join(", ")} — left out of expected views`);
-  if (noP.length) W.push(`No price for ${noP.map(h).join(", ")} — type one in`);
-  if (B && !ok(B.r1k)) W.push(`${esc(B.name)} has no registrations yet — pick another benchmark`);
-  $("warns").innerHTML = L.length ? W.map((w) => `<div>${w}</div>`).join("") : "";
+  const pB = priced.reduce((s, r) => s + r.price, 0), pV = priced.reduce((s, r) => s + r.views, 0), cpm = pV ? pB / pV * 1000 : null;
+  const bad = rows.filter((r) => r.e?.quality?.verdict === "bad");
+  $("warns").innerHTML = bad.length ? `<div>⚠ ${bad.length} rated bad: ${bad.map((r) => "@" + esc(r.c.handle)).join(", ")}</div>` : "";
 
-  $("rosterRows").innerHTML = rows.length ? rows.map(({ c, e, views, price, cpm: rc, regs: rr }) => {
+  $("rosterRows").innerHTML = rows.length ? rows.map(({ c, e, views, price, cpm: rc }) => {
     const x = c.platform === "x", prof = x ? "https://x.com/" + encodeURIComponent(c.handle) : null, v = e?.quality?.verdict;
     return `<tr>
       <td class="l"><div class="rwho">${c.avatar ? `<img src="${esc(c.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="ph"></span>`}
@@ -550,7 +502,6 @@ function renderRoster() {
       <td>${c.from_posts ? `<span title="Paid per post in this wave — change it on the post below">${fmt$(price, 0)}</span><span class="sm">from posts</span>`
         : `<input class="rprice" data-rprice="${esc(c.key)}" inputmode="decimal" value="${price != null ? Math.round(price * 100) / 100 : ""}" placeholder="—" title="Planned price (default: their quote, else what we paid per post before)">`}</td>
       <td>${fmt$(rc)}</td>
-      <td>${ok(rr) ? rr.toFixed(1) : "—"}</td>
       <td class="l"><label class="otick"><input type="checkbox" data-rout="${esc(c.key)}" ${c.outreached ? "checked" : ""}>${c.outreached ? `<span><span class="ok">Contacted</span><span class="sm">${esc((c.outreached_by || "").split("@")[0])} · ${d(c.outreached_at)}</span></span>` : `<span class="muted">Not yet</span>`}</label></td>
       <td class="l">${c.outreached ? `<span class="racct">${acctSel(c.key, c.outreach_from, R.accounts)}</span>` : `<span class="muted">—</span>`}</td>
       <td class="l">${prof ? `<a class="dm" href="${prof}" target="_blank" rel="noopener">x.com/${esc(c.handle)} ↗</a>` : "—"}</td>
@@ -560,9 +511,9 @@ function renderRoster() {
       <td class="l">${c.posted ? `<span class="ok">✓ ${c.posted} post${c.posted === 1 ? "" : "s"}</span>` : `<span class="muted">waiting</span>`}</td>
       <td>${c.from_posts ? "" : `<button class="ghost" data-rremove="${esc(c.key)}" title="Remove from this wave (stays in Influencers)">✕</button>`}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="12" class="muted" style="text-align:center;padding:16px">No influencers in this wave yet.</td></tr>`;
+  }).join("") : `<tr><td colspan="11" class="muted" style="text-align:center;padding:16px">No influencers in this wave yet.</td></tr>`;
   $("rosterFoot").innerHTML = rows.length ? `<tr><td class="l">Total</td><td></td><td>${fmtN(views)}</td><td>${fmt$(budget, 0)}</td><td>${fmt$(cpm)}</td>
-    <td>${ok(regs) ? Math.round(regs) : "—"}</td><td class="l" style="font-weight:400">${contacted} / ${L.length} contacted</td><td colspan="5"></td></tr>` : "";
+    <td class="l" style="font-weight:400">${contacted} / ${L.length} contacted</td><td colspan="5"></td></tr>` : "";
 }
 
 function renderPicker() {
@@ -633,7 +584,6 @@ document.querySelectorAll("[data-quick]").forEach((b) => b.addEventListener("cli
   if (!add.length) return toast("Nobody new to add");
   waveCreators({ add: add.map((c) => c.key) }).then(() => toast(`Added ${add.length} to this wave`));
 }));
-$("bench").addEventListener("change", () => { try { localStorage.setItem("xca_bench", $("bench").value); } catch (e) {} renderRoster(); });
 $("waveNotes").addEventListener("change", () => waveCreators({ notes: $("waveNotes").value }).then(() => toast("Notes saved")));
 $("rosterRows").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-rremove]"); if (!b) return;

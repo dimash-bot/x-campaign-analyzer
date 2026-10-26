@@ -98,9 +98,8 @@ The app exposes an MCP server at `https://<your-railway-domain>/mcp`, so Claude 
 
 **Influencers in this wave** (Waves tab): pick creators from the Influencers database (search, quality / paid /
 outreach filters, "+ All good", "+ Top 10 by expected CPM") or paste new @handles — those are added to Influencers
-(profile + quality check in the background) and to the wave in one step. Changes save immediately. The wave sums their
-expected views (our paid posts, else their median) and prices (typed, quote, or past pay) and projects registrations /
-API users from past waves; each creator shows the link to their X account, the account of ours that contacted them,
+(profile + quality check in the background) and to the wave in one step. Changes save immediately. Each creator shows expected
+views (our paid posts, else their median), price (typed, quote, or past pay), the link to their X account, the account of ours that contacted them,
 paid status and whether they have posted. Behind the scenes the list is a `plans` row linked to the wave (renamed and
 deleted with it). The old Wave builder page (`/builder`) now redirects to Waves.
 
