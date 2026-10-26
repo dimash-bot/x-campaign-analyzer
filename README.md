@@ -104,7 +104,7 @@ API users from past waves; each creator shows the link to their X account, the a
 paid status and whether they have posted. Behind the scenes the list is a `plans` row linked to the wave (renamed and
 deleted with it). The old Wave builder page (`/builder`) now redirects to Waves.
 
-**🔍 Find their posts** (Waves tab): searches every X influencer of the wave (its list + authors of its posts) through
+**🔍 Find their posts** (Waves tab): searches every X influencer in the wave's list (our own accounts skipped) through
 Apify for posts that mention us (`BRAND_TERMS`, default `drex,nace,naceai`; replies and reposts skipped) and lists the
 ones not recorded in any wave. Tick and import them — cost is prefilled with the planned price for one new post per
 creator. Needs `APIFY_TOKEN`; ~$0.0004 per post found.

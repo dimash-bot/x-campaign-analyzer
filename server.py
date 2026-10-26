@@ -1371,7 +1371,7 @@ def delete_wave(campaign_id):
 
 
 # ---------------------------------------------------------------- find a wave's unrecorded posts
-# Search each of the wave's X creators (its influencer list + authors of its posts) for posts that mention us and
+# Search each X influencer in the wave's list (not every post author, not our own accounts) for posts that mention us and
 # aren't tracked in any wave yet, so missed integrations can be imported with one click. Runs in the background.
 BRAND_TERMS = [t.strip() for t in os.environ.get("BRAND_TERMS", "drex,nace,naceai").split(",") if t.strip()]
 _scans, _scans_lock = {}, threading.Lock()
@@ -1390,12 +1390,10 @@ def start_wave_scan(campaign_id):
         if not c.execute("SELECT 1 FROM campaigns WHERE id=?", (campaign_id,)).fetchone():
             raise ValueError("wave not found")
         plan = c.execute("SELECT items FROM plans WHERE campaign_id=? ORDER BY id DESC LIMIT 1", (campaign_id,)).fetchone()
-        keys = [i["key"] for i in json.loads(plan["items"] or "[]")] if plan else []
-        keys += [creator_key("x", r[0]) for r in c.execute(
-            "SELECT DISTINCT author FROM posts WHERE campaign_id=? AND COALESCE(platform,'x')='x' AND author IS NOT NULL AND author != ''", (campaign_id,))]
+        keys = [i["key"] for i in json.loads(plan["items"] or "[]")] if plan else []   # only the wave's influencer list
     handles = list(dict.fromkeys(k.split(":", 1)[1] for k in keys if k.startswith("x:") and k.split(":", 1)[1] not in OWN_HANDLES))
     if not handles:
-        raise ValueError("no X influencers in this wave yet")
+        raise ValueError("add the wave's X influencers to its list first — only they are searched")
     with _scans_lock:
         if _scans.get(campaign_id, {}).get("status") == "running":
             return wave_scan_status(campaign_id)
