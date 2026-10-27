@@ -64,6 +64,23 @@ tfoot td { font-weight: 650; border-top: 2px solid var(--border); border-bottom:
 .legend { color: var(--muted); font-size: 12px; margin-top: 10px; }
 .legend b { color: var(--good); }
 .empty { color: var(--muted); padding: 20px 0; }
+/* Trends charts (plain SVG, colours from the theme) */
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 18px 28px; margin-top: 8px; }
+.chart h3 { font-size: 13px; margin: 0 0 2px; }
+.chart .sub { margin-bottom: 6px; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.chart svg .lbl { fill: var(--text); }
+.chart svg .grid { stroke: var(--border); }
+.chart svg .bar { fill: var(--accent); }
+.chart svg .bar2 { fill: var(--good); }
+.chart svg .bar:hover, .chart svg .bar2:hover { opacity: .75; }
+.chart svg .avg { stroke: var(--text); stroke-width: 2; fill: none; }
+.chart svg .apiline { stroke: var(--good); stroke-width: 1.6; fill: none; }
+.chart svg .wave { stroke: var(--muted); stroke-dasharray: 3 3; }
+.chart .keys { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+.chart .keys i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.chart.wide { grid-column: 1 / -1; }
 </style>
 </head>
 <body>
@@ -80,6 +97,12 @@ tfoot td { font-weight: 650; border-top: 2px solid var(--border); border-bottom:
   <h2>All waves</h2>
   <p class="sub" id="asof"></p>
   <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <h2>Trends</h2>
+    <p class="sub">Waves in launch order. Hover a bar for the exact numbers.</p>
+    <div class="charts" id="charts"></div>
+  </section>
 
   <section class="card">
     <h2>By wave</h2>
@@ -163,7 +186,86 @@ function render(R) {
       <td class="wave">${esc(w.name)}<small>${w.first_post_utc ? "from " + new Date(w.first_post_utc).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "no posts yet"}</small></td>
       ${cells(w, false)}</tr>`).join("") : `<tr><td colspan="17" class="empty">No waves with data yet.</td></tr>`;
   $("foot").innerHTML = W.length ? `<tr><td>All waves</td>${cells(T, true)}</tr>` : "";
+  renderCharts(R);
   $("asof").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · refreshes every 30s`;
+}
+
+// ---- Trends charts
+const svgEsc = esc;
+const waveNo = (name) => (String(name).match(/\d+/) || [""])[0];
+function shortName(n) { n = String(n); return n.length > 26 ? n.slice(0, 25) + "…" : n; }
+
+// Horizontal bars: one row per wave, top = first launched. log: scale for numbers spanning orders of magnitude.
+function hbars(items, fmt, { log = false, color = "bar", avg = null } = {}) {
+  const L = items.filter((i) => ok(i.v) && (!log || i.v > 0));
+  if (!L.length) return `<p class="sub">No data yet.</p>`;
+  const W = 560, lw = 170, row = 22, H = L.length * row + 22, max = Math.max(...L.map((i) => i.v));
+  const sc = (v) => log ? Math.log10(Math.max(v, 1)) / Math.log10(Math.max(max, 10)) : v / max;
+  const bw = W - lw - 70;
+  let g = "", ref = "";
+  if (ok(avg) && (!log || avg > 0)) {             // drawn first so bars and labels sit on top of it
+    const x = lw + sc(avg) * bw;
+    ref = `<line class="wave" x1="${x}" x2="${x}" y1="0" y2="${L.length * row + 4}"/><text x="${x}" y="${L.length * row + 18}" text-anchor="middle">all waves ${svgEsc(fmt(avg))}</text>`;
+  }
+  L.forEach((i, k) => {
+    const y = k * row + 4, w = Math.max(2, sc(i.v) * bw);
+    g += `<text class="lbl" x="${lw - 8}" y="${y + 13}" text-anchor="end">${svgEsc(shortName(i.label))}</text>
+      <rect class="${color}" x="${lw}" y="${y + 2}" width="${w}" height="${row - 7}" rx="3"><title>${svgEsc(i.label)}: ${svgEsc(i.title || fmt(i.v))}</title></rect>
+      <text x="${lw + w + 6}" y="${y + 13}" style="paint-order:stroke;stroke:var(--surface);stroke-width:3px">${svgEsc(fmt(i.v))}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img">${ref}${g}</svg>`;
+}
+
+// Daily signups across all waves: bars = registrations, thick line = 7-day average, green line = API users, dashed = wave starts
+function timeline(R) {
+  const by = {};
+  for (const c of R.campaigns) for (const d of c.daily || []) {
+    if (!/^\d{4}-\d\d-\d\d$/.test(d.day)) continue;
+    const r = (by[d.day] ||= { reg: 0, api: 0 }); r.reg += d.registrations || 0; r.api += d.api_users || 0;
+  }
+  const keys = Object.keys(by).sort();
+  if (!keys.length) return `<p class="sub">No signups imported yet.</p>`;
+  const days = [], t0 = new Date(keys[0] + "T00:00:00Z"), t1 = new Date(keys[keys.length - 1] + "T00:00:00Z");
+  for (let t = t0; t <= t1; t = new Date(t.getTime() + 864e5)) { const k = t.toISOString().slice(0, 10); days.push({ day: k, ...(by[k] || { reg: 0, api: 0 }) }); }
+  days.forEach((d, i) => { const w = days.slice(Math.max(0, i - 6), i + 1); d.avg = w.reduce((s, x) => s + x.reg, 0) / w.length; });
+  const W = 820, H = 230, pl = 34, pr = 8, pt = 26, pb = 22, n = days.length, cw = (W - pl - pr) / n;
+  const max = Math.max(...days.map((d) => d.reg), 1), y = (v) => pt + (H - pt - pb) * (1 - v / max), x = (i) => pl + i * cw;
+  let g = "";
+  for (const v of [0, Math.round(max / 2), max]) g += `<line class="grid" x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}"/><text x="${pl - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+  const starts = R.campaigns.filter((c) => c.first_post_utc).map((c) => ({ c, day: new Date(c.first_post_utc).toISOString().slice(0, 10) }));
+  for (const s of starts) {
+    const i = days.findIndex((d) => d.day === s.day); if (i < 0) continue;
+    g += `<line class="wave" x1="${x(i)}" x2="${x(i)}" y1="${pt - 4}" y2="${H - pb}"><title>${svgEsc(s.c.name)} starts ${s.day}</title></line>
+      <text x="${x(i) + 2}" y="${pt - 8}" class="lbl"><title>${svgEsc(s.c.name)}</title>${svgEsc(waveNo(s.c.name) || s.c.name.slice(0, 4))}</text>`;
+  }
+  days.forEach((d, i) => {
+    g += `<rect class="bar" x="${x(i) + 1}" y="${y(d.reg)}" width="${Math.max(1, cw - 2)}" height="${H - pb - y(d.reg)}" rx="1.5" opacity=".55"><title>${d.day}: ${d.reg} registrations · ${d.api} API users · 7-day avg ${d.avg.toFixed(1)}</title></rect>`;
+  });
+  g += `<path class="apiline" d="${days.map((d, i) => `${i ? "L" : "M"}${x(i) + cw / 2},${y(d.api)}`).join("")}"/>`;
+  g += `<path class="avg" d="${days.map((d, i) => `${i ? "L" : "M"}${x(i) + cw / 2},${y(d.avg)}`).join("")}"/>`;
+  const step = Math.ceil(n / 9);
+  days.forEach((d, i) => { if (i % step === 0) g += `<text x="${x(i) + cw / 2}" y="${H - 6}" text-anchor="middle">${new Date(d.day + "T00:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}</text>`; });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img">${g}</svg>
+    <div class="keys"><span><i style="background:var(--accent);opacity:.55"></i>registrations / day</span><span><i style="background:var(--text)"></i>7-day average</span>
+    <span><i style="background:var(--good)"></i>API users / day</span><span>┆ wave start (number = wave)</span></div>`;
+}
+
+function renderCharts(R) {
+  const T = R.totals;
+  const W = R.campaigns.filter((c) => c.posts || c.registrations)
+    .sort((a, b) => (a.first_post_utc || "9").localeCompare(b.first_post_utc || "9"));
+  const it = (f, title) => W.map((w) => ({ label: w.name, v: w[f], title: title && title(w) }));
+  const paid = (f) => it(f).map((i, k) => ({ ...i, v: W[k].total_budget ? i.v : null }));
+  $("charts").innerHTML = `
+    <div class="chart wide"><h3>Daily signups</h3><p class="sub">Each signup counts on the day they registered. Spikes after a wave start = that wave working.</p>${timeline(R)}</div>
+    <div class="chart"><h3>Cost per registration</h3><p class="sub">Total budget ÷ registrations. Shorter is better.</p>
+      ${hbars(paid("cost_per_registration").map((i, k) => ({ ...i, title: `${fmt$(i.v)} · ${fmtInt(W[k].registrations)} regs on ${fmt$(W[k].total_budget, 0)}` })), (v) => fmt$(v, 0), { avg: T.cost_per_registration })}</div>
+    <div class="chart"><h3>Cost per API user</h3><p class="sub">Total budget ÷ users who made ≥1 request. Shorter is better.</p>
+      ${hbars(paid("cost_per_api_user").map((i, k) => ({ ...i, title: `${fmt$(i.v)} · ${fmtInt(W[k].api_users)} API users` })), (v) => fmt$(v, 0), { color: "bar2", avg: T.cost_per_api_user })}</div>
+    <div class="chart"><h3>Registration → API</h3><p class="sub">Share of the wave's signups who used the API.</p>
+      ${hbars(it("reg_to_api_pct").map((i, k) => ({ ...i, title: `${pct(i.v, 1)} · ${fmtInt(W[k].api_users)} of ${fmtInt(W[k].registrations)}` })), (v) => pct(v, 0), { color: "bar2", avg: T.reg_to_api_pct })}</div>
+    <div class="chart"><h3>Median tokens per API user</h3><p class="sub">How deep a typical active user went (log scale: each step is 10×).</p>
+      ${hbars(it("median_tokens_per_api_user").map((i, k) => ({ ...i, title: `${fmtTok(i.v)} median · ${fmtTok(W[k].tokens)} total` })), fmtTok, { log: true, avg: T.median_tokens_per_api_user })}</div>`;
 }
 
 $("rows").addEventListener("click", (e) => {
