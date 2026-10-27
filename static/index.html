@@ -299,7 +299,7 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
       <table>
         <thead><tr>
           <th class="l">Day</th><th>Posts</th><th>Spend</th><th>Views</th><th>Engag.</th><th>ER</th><th>CPM</th>
-          <th>Registrations</th><th>API users</th><th>$ / reg</th><th>$ / API user</th><th>Reg → API</th><th>Reg / 1K views</th><th></th>
+          <th>Registrations</th><th>API users</th><th title="Input tokens used so far by the users who signed up that day">Tokens</th><th>$ / reg</th><th>$ / API user</th><th>Reg → API</th><th>Reg / 1K views</th><th></th>
         </tr></thead>
         <tbody id="daysBody"></tbody>
         <tfoot id="daysFoot"></tfoot>
@@ -347,6 +347,7 @@ try { cid = Number(localStorage.getItem("xca_campaign")) || null; } catch (e) {}
 
 const fmtN = (n) => n == null || !isFinite(n) ? "—" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
 const fmtInt = (n) => (n || 0).toLocaleString();
+const fmtTok = (n) => n == null || !isFinite(n) ? "—" : n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
 const fmt$ = (n, d = 2) => n == null || !isFinite(n) ? "—" : "$" + n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 const fmtPct = (n, d = 2) => n == null || !isFinite(n) ? "—" : (n * 100).toFixed(d) + "%";
 const div = (a, b) => (b ? a / b : null);
@@ -425,7 +426,7 @@ function sortedPosts(P) {
 
 function aggregateDays() {
   const m = {};
-  const row = (d) => (m[d] ||= { day: d, posts: 0, spend: 0, spendV: 0, views: 0, eng: 0, engV: 0, reg: 0, api: 0, manReg: 0, manApi: 0 });
+  const row = (d) => (m[d] ||= { day: d, posts: 0, spend: 0, spendV: 0, views: 0, eng: 0, engV: 0, reg: 0, api: 0, tok: 0, manReg: 0, manApi: 0 });
   for (const p of S.posts.filter((p) => !p.excluded)) {
     const r = row(p.day || "—"); r.posts++; r.spend += cost(p); r.views += p.views || 0; r.eng += eng(p);
     if (p.views) { r.engV += eng(p); r.spendV += cost(p); }
@@ -433,6 +434,7 @@ function aggregateDays() {
   for (const d of S.days) {
     const r = row(d.day);
     r.reg = d.registrations; r.api = d.api_users;                       // CSV users + typed-in, already summed by the server
+    r.tok = d.tokens || 0;                                                // input tokens used so far by that day's signups
     r.manReg = d.manual_registrations || 0; r.manApi = d.manual_api_users || 0;
   }
   return Object.values(m).sort((a, b) => a.day.localeCompare(b.day));
@@ -663,6 +665,10 @@ function render() {
     k("API users", fmtInt(apiU), "made ≥1 API request"),
     k("Cost / API user", fmt$(div(total, apiU)), "total budget ÷ API users", "hl"),
     k("Reg → API", fmtPct(div(apiU, reg), 1), "activation rate"),
+    ...(S.tokens ? [
+      k("Input tokens", fmtTok(S.tokens.tokens), `used by this wave's signups · ${fmtTok(S.tokens.tokens_7d)} in the last 7 days`),
+      k("Median tokens / API user", fmtTok(S.tokens.median_tokens_per_api_user), "a typical active user (a few heavy users make most of the total)"),
+    ] : []),
   ].join("");
 
   // Posts table
@@ -703,12 +709,13 @@ function render() {
       <td>${fmtPct(div(d.engV, d.views))}</td><td>${fmt$(div(d.spendV * 1000, d.views))}</td>
       <td>${d.day === "—" ? "" : fmtInt(d.reg)}${d.manReg ? `<span class="manual" title="typed in by hand, on top of the CSV">+${fmtInt(d.manReg)} by hand</span>` : ""}</td>
       <td>${d.day === "—" ? "" : fmtInt(d.api)}${d.manApi ? `<span class="manual">+${fmtInt(d.manApi)} by hand</span>` : ""}</td>
+      <td>${d.day === "—" || !S.tokens ? "" : fmtTok(d.tok)}</td>
       <td>${d.spend ? fmt$(div(d.spend, d.reg)) : "—"}</td><td>${d.spend ? fmt$(div(d.spend, d.api)) : "—"}</td><td>${fmtPct(div(d.api, d.reg), 1)}</td>
       <td>${div(d.reg * 1000, d.views)?.toFixed(2) ?? "—"}</td>
       <td class="daytools">${d.day === "—" ? "" : `<button class="ghost" title="Add / edit users typed in for this day" data-add-day="${d.day}">✎</button>`}${d.manReg || d.manApi ? `<button class="ghost" title="Remove the numbers typed in for this day (CSV users stay)" data-del-day="${d.day}">✕</button>` : ""}</td>
-    </tr>`).join("") : `<tr><td colspan="14" class="l muted">Days appear automatically once posts are added.</td></tr>`;
+    </tr>`).join("") : `<tr><td colspan="15" class="l muted">Days appear automatically once posts are added.</td></tr>`;
   $("daysFoot").innerHTML = days.length ? `<tr><td class="l">Total</td><td>${P.length}</td><td>${fmt$(T.spend)}</td><td>${fmtInt(T.views)}</td><td>${fmtInt(T.eng)}</td>
-    <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spendV * 1000, T.views))}</td><td>${fmtInt(reg)}</td><td>${fmtInt(apiU)}</td>
+    <td>${fmtPct(div(T.engV, T.views))}</td><td>${fmt$(div(T.spendV * 1000, T.views))}</td><td>${fmtInt(reg)}</td><td>${fmtInt(apiU)}</td><td>${S.tokens ? fmtTok(S.tokens.tokens) : ""}</td>
     <td title="total budget incl. other spend">${fmt$(div(total, reg))}</td><td title="total budget incl. other spend">${fmt$(div(total, apiU))}</td><td>${fmtPct(div(apiU, reg), 1)}</td>
     <td>${div(reg * 1000, T.views)?.toFixed(2) ?? "—"}</td><td></td></tr>` : "";
 }

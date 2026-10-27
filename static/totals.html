@@ -89,7 +89,7 @@ tfoot td { font-weight: 650; border-top: 2px solid var(--border); border-bottom:
         <thead><tr>
           <th>Wave</th><th>Posts</th><th>Budget</th><th>Avg / post</th><th>Views</th><th>Engag.</th><th>ER</th>
           <th>CPM</th><th>CPE</th><th>Registrations</th><th class="key">$ / reg</th><th>API users</th><th class="key">$ / API user</th>
-          <th>Reg → API</th><th>Reg / 1K views</th>
+          <th>Reg → API</th><th>Reg / 1K views</th><th title="Input tokens used by the wave&apos;s signups (all time)">Tokens</th><th title="Median input tokens per user who made ≥1 request">Median tokens / API user</th>
         </tr></thead>
         <tbody id="rows"></tbody>
         <tfoot id="foot"></tfoot>
@@ -106,6 +106,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const ok = (n) => n != null && isFinite(n);
 const fmtN = (n) => !ok(n) ? "—" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
 const fmtInt = (n) => (n || 0).toLocaleString();
+const fmtTok = (n) => !ok(n) ? "—" : n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : Math.round(n).toLocaleString();
 const fmt$ = (n, d = 2) => !ok(n) ? "—" : "$" + n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 const pct = (n, d = 2) => !ok(n) ? "—" : n.toFixed(d) + "%";
 const PLAT = { x: "X", linkedin: "LinkedIn", other: "Other" };
@@ -124,6 +125,7 @@ const COLS = [
   ["registrations", fmtInt, "high"], ["cost_per_registration", (v) => fmt$(v), "low", "key"],
   ["api_users", fmtInt, "high"], ["cost_per_api_user", (v) => fmt$(v), "low", "key"],
   ["reg_to_api_pct", (v) => pct(v, 1), "high"], ["regs_per_1k_views", (v) => ok(v) ? v.toFixed(2) : "—", "high"],
+  ["tokens", fmtTok, "high"], ["median_tokens_per_api_user", fmtTok, "high"],
 ];
 
 function render(R) {
@@ -144,6 +146,8 @@ function render(R) {
     k("Cost / registration", fmt$(T.cost_per_registration), "total budget ÷ registrations", "hl"),
     k("API users", fmtInt(T.api_users), `${pct(T.reg_to_api_pct, 1)} of registrations`),
     k("Cost / API user", fmt$(T.cost_per_api_user), "total budget ÷ API users", "hl"),
+    k("Input tokens", fmtTok(T.tokens), ok(T.tokens_7d) ? `${fmtTok(T.tokens_7d)} in the last 7 days` : "import a users export with token columns"),
+    k("Median tokens / API user", fmtTok(T.median_tokens_per_api_user), "a typical active user"),
   ].join("");
 
   // Best value per column (only meaningful with 2+ waves)
@@ -157,7 +161,7 @@ function render(R) {
 
   $("rows").innerHTML = W.length ? W.map((w) => `<tr data-id="${w.id}">
       <td class="wave">${esc(w.name)}<small>${w.first_post_utc ? "from " + new Date(w.first_post_utc).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "no posts yet"}</small></td>
-      ${cells(w, false)}</tr>`).join("") : `<tr><td colspan="15" class="empty">No waves with data yet.</td></tr>`;
+      ${cells(w, false)}</tr>`).join("") : `<tr><td colspan="17" class="empty">No waves with data yet.</td></tr>`;
   $("foot").innerHTML = W.length ? `<tr><td>All waves</td>${cells(T, true)}</tr>` : "";
   $("asof").textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · refreshes every 30s`;
 }

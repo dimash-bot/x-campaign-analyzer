@@ -17,6 +17,7 @@ import os
 import queue
 import re
 import shutil
+import statistics
 import sqlite3
 import sys
 import threading
@@ -138,8 +139,6 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS email_events_email ON email_events(email_id)")
         c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")   # small persistent flags
         add_col("emails", "broadcast_id", "TEXT")
-        for col_ in ("utm_medium", "utm_campaign", "utm_content"):   # users.ref holds utm_source
-            add_col("users", col_, "TEXT")    # from webhook events (API-synced emails are matched by subject + time)
         # Gmail Postmaster Tools, one row per sending domain per day (Gmail's own numbers)
         c.execute("""CREATE TABLE IF NOT EXISTS gmail_stats (
             domain TEXT NOT NULL, day TEXT NOT NULL, spam REAL, spam_lo REAL, spam_hi REAL, domain_rep TEXT, ip_rep TEXT,
@@ -155,6 +154,10 @@ def init_db():
             email TEXT PRIMARY KEY, signed_up TEXT NOT NULL,          -- UTC ISO
             keys INTEGER DEFAULT 0, requests_all REAL DEFAULT 0, requests_7d REAL DEFAULT 0,
             credit TEXT, unconfirmed INTEGER DEFAULT 0, ref TEXT, imported_at TEXT)""")
+        for col_ in ("utm_medium", "utm_campaign", "utm_content"):   # users.ref holds utm_source
+            add_col("users", col_, "TEXT")
+        for col_ in ("tokens_all", "tokens_7d"):     # input tokens used, from the signup export (NULL = file had no such column)
+            add_col("users", col_, "REAL")
         # Influencer profiles + their normal performance (baseline), keyed "x:<handle>" / "linkedin:<name>"
         c.execute("""CREATE TABLE IF NOT EXISTS creators (
             key TEXT PRIMARY KEY, platform TEXT, handle TEXT, name TEXT, user_id TEXT, avatar TEXT,
@@ -1823,11 +1826,12 @@ def state(campaign_id):
         campaigns = [dict(r) for r in c.execute("SELECT * FROM campaigns ORDER BY id")]
         posts = [dict(r) for r in c.execute("SELECT * FROM posts WHERE campaign_id=? ORDER BY day, id", (campaign_id,))]
         days = wave_days(c, campaign_id, user_days(c))
+        tokens = wave_tokens(c).get(campaign_id)
         n_users = c.execute("SELECT count(*) FROM users").fetchone()[0]
         roster = wave_roster(c, campaign_id)
     with _pending_lock:
         pending = [p["id"] for p in posts if p["id"] in _pending]
-    return {"campaigns": campaigns, "posts": posts, "days": days, "pending": pending,
+    return {"campaigns": campaigns, "posts": posts, "days": days, "pending": pending, "tokens": tokens,
             "users_total": n_users, "agencies": agencies_list(), "roster": roster}
 
 
@@ -1898,6 +1902,7 @@ def import_users(csv_text, tz_name="America/Los_Angeles", replace=False):
     c_req7 = col("requests_7d") or (cols.get("requests") if c_req != cols.get("requests") else None)
     c_credit, c_method, c_ref = col("credit"), col("sign_in_method", "sign_in"), col("ref", "referral", "utm_source", "referrer")
     c_um, c_uc, c_uct = col("utm_medium"), col("utm_campaign"), col("utm_content")
+    c_tok, c_tok7 = col("tokens_all", "input_tokens_all_time", "input_tokens", "tokens"), col("tokens_7d", "input_tokens_last_7_days")
     cell = lambda r, k: ((r.get(k) or "").strip() or None) if k else None  # noqa: E731
     ok, bad, seen, removed = 0, 0, set(), 0
     with _db_lock, db() as c:
@@ -1908,19 +1913,22 @@ def import_users(csv_text, tz_name="America/Los_Angeles", replace=False):
                 continue
             seen.add(email)
             c.execute("""INSERT INTO users(email, signed_up, keys, requests_all, requests_7d, credit, unconfirmed, ref, imported_at,
-                                utm_medium, utm_campaign, utm_content)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET signed_up=excluded.signed_up,
+                                utm_medium, utm_campaign, utm_content, tokens_all, tokens_7d)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET signed_up=excluded.signed_up,
                          keys=excluded.keys, requests_all=excluded.requests_all, requests_7d=excluded.requests_7d,
                          credit=excluded.credit, unconfirmed=excluded.unconfirmed, ref=COALESCE(excluded.ref, users.ref),
                          utm_medium=COALESCE(excluded.utm_medium, users.utm_medium),
                          utm_campaign=COALESCE(excluded.utm_campaign, users.utm_campaign),
                          utm_content=COALESCE(excluded.utm_content, users.utm_content),
+                         tokens_all=COALESCE(excluded.tokens_all, users.tokens_all),
+                         tokens_7d=COALESCE(excluded.tokens_7d, users.tokens_7d),
                          imported_at=excluded.imported_at""",
                       (email, t.isoformat(), int(_num(r.get(c_keys))) if c_keys else 0,
                        _num(r.get(c_req)) if c_req else 0, _num(r.get(c_req7)) if c_req7 else 0,
                        r.get(c_credit) if c_credit else None,
                        int("unconfirmed" in (r.get(c_method) or "").lower()) if c_method else 0,
-                       (r.get(c_ref) or None) if c_ref else None, now(), cell(r, c_um), cell(r, c_uc), cell(r, c_uct)))
+                       (r.get(c_ref) or None) if c_ref else None, now(), cell(r, c_um), cell(r, c_uc), cell(r, c_uct),
+                       _num(r.get(c_tok)) if c_tok else None, _num(r.get(c_tok7)) if c_tok7 else None))
             ok += 1
         if replace:
             # Safety: never wipe the table because of a file we couldn't read properly
@@ -1968,15 +1976,33 @@ def user_days(c):
         return None
     wave = assign_waves(c)
     agg = {}
-    for u in c.execute("SELECT email, signed_up, requests_all, credit FROM users"):
+    for u in c.execute("SELECT email, signed_up, requests_all, credit, tokens_all FROM users"):
         cid = wave.get(u[0])
         if cid is None:
             continue
-        d = agg.setdefault(cid, {}).setdefault(u[1][:10], {"day": u[1][:10], "registrations": 0, "api_users": 0, "flagged": 0})
+        d = agg.setdefault(cid, {}).setdefault(u[1][:10], {"day": u[1][:10], "registrations": 0, "api_users": 0, "flagged": 0, "tokens": 0})
         d["registrations"] += 1
         d["api_users"] += u[2] > 0
+        d["tokens"] += u[4] or 0
         d["flagged"] += (u[3] or "") in ("Credit voided", "Credit withheld")
     return {cid: sorted(v.values(), key=lambda d: d["day"]) for cid, v in agg.items()}
+
+
+def wave_tokens(c):
+    """{campaign_id: {tokens, tokens_7d, median_tokens_per_api_user}} for the wave's signups (all-time input tokens
+    from the export). A few heavy users make most of the total, so the median shows what a typical user did."""
+    wave, per = assign_waves(c), {}
+    for e, req, tok, tok7 in c.execute("SELECT email, requests_all, tokens_all, tokens_7d FROM users WHERE tokens_all IS NOT NULL"):
+        if wave.get(e) is not None:
+            per.setdefault(wave[e], []).append((req or 0, tok or 0, tok7 or 0))
+    return {cid: summarize_tokens(L) for cid, L in per.items()}
+
+
+def summarize_tokens(L):
+    """L = [(requests, tokens, tokens_7d)] per user."""
+    used = [t for q, t, _ in L if q > 0]
+    return {"tokens": sum(t for _, t, _ in L), "tokens_7d": sum(t7 for *_, t7 in L),
+            "median_tokens_per_api_user": statistics.median(used) if used else None}
 
 
 def wave_days(c, campaign_id, by_users):
@@ -2019,6 +2045,9 @@ def report(campaign_ids=None, top=5):
     with db() as c:
         camps = [dict(r) for r in c.execute("SELECT * FROM campaigns ORDER BY id")]
         by_users = user_days(c)
+        toks, wave_of = wave_tokens(c), assign_waves(c)
+        all_tok = [(r[1] or 0, r[2] or 0, r[3] or 0) for r in c.execute(
+            "SELECT email, requests_all, tokens_all, tokens_7d FROM users WHERE tokens_all IS NOT NULL") if r[0] in wave_of]
         for camp in camps:
             if campaign_ids and camp["id"] not in campaign_ids:
                 continue
@@ -2066,6 +2095,7 @@ def report(campaign_ids=None, top=5):
                 "cost_per_registration": r2(dv(total, regs)), "cost_per_api_user": r2(dv(total, api)),
                 "reg_to_api_pct": r2(dv(api * 100, regs)), "regs_per_1k_views": r2(dv(regs * 1000, views)),
                 "flagged_users": sum(d.get("flagged", 0) for d in days),
+                **(toks.get(camp["id"]) or {"tokens": None, "tokens_7d": None, "median_tokens_per_api_user": None}),
                 "_sums": {"spend_v": spend_v, "spend_e": spend_e, "eng_v": e_v},   # for cross-wave totals
                 "daily": days,
                 "top": ranked[:top], "bottom": ranked[::-1][:top] if top else [],
@@ -2085,6 +2115,7 @@ def report(campaign_ids=None, top=5):
                 "reg_to_api_pct": r2(dv(tot["api_users"] * 100, tot["registrations"])),
                 "regs_per_1k_views": r2(dv(tot["registrations"] * 1000, tot["views"])),
                 "by_platform": {pl: sum(c["by_platform"].get(pl, 0) for c in live) for pl in {p for c in live for p in c["by_platform"]}}})
+    tot.update(summarize_tokens(all_tok) if all_tok else {"tokens": None, "tokens_7d": None, "median_tokens_per_api_user": None})
     for c in out:
         c.pop("_sums", None)
     return {"campaigns": out, "totals": tot, "registrations_source": "users" if by_users is not None else "manual",
