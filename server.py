@@ -1946,11 +1946,25 @@ def import_users(csv_text, tz_name="America/Los_Angeles", replace=False):
             "registrations_by_wave": {names[k]: v for k, v in waves.items()}}
 
 
+def post_time(p):
+    """UTC ISO time of a post: the fetched created_at, else (X posts not fetched yet) the time inside the tweet ID."""
+    if p["created_at"]:
+        return p["created_at"]
+    tid = p["tweet_id"] or ""
+    if (p["platform"] or "x") == "x" and tid.isdigit() and len(tid) >= 15:   # snowflake: ms since 2010-11-04 in the top bits
+        t = datetime.fromtimestamp(((int(tid) >> 22) + 1288834974657) / 1000, timezone.utc)
+        return t.replace(microsecond=0).isoformat()
+    return None
+
+
 def wave_starts(c):
-    """[(campaign_id, first_post_utc)] for campaigns that have fetched posts, oldest first."""
-    rows = c.execute("""SELECT campaign_id, min(created_at) FROM posts WHERE created_at IS NOT NULL AND created_at != ''
-                        GROUP BY campaign_id ORDER BY min(created_at)""").fetchall()
-    return [(r[0], datetime.fromisoformat(r[1])) for r in rows]
+    """[(campaign_id, first_post_utc)] for campaigns with at least one dated post, oldest first."""
+    first = {}
+    for p in c.execute("SELECT campaign_id, created_at, tweet_id, platform FROM posts"):
+        t = post_time(p)
+        if t and (p["campaign_id"] not in first or t < first[p["campaign_id"]]):
+            first[p["campaign_id"]] = t
+    return sorted(((cid, datetime.fromisoformat(t)) for cid, t in first.items()), key=lambda x: x[1])
 
 
 def assign_waves(c):
@@ -2084,7 +2098,7 @@ def report(campaign_ids=None, top=5):
             ranked = sorted(paid, key=lambda a: (a["rank_score"], a["cpm"]))
             out.append({
                 "id": camp["id"], "name": camp["name"], "posts": len(posts), "excluded_posts": n_excluded,
-                "first_post_utc": min((p["created_at"] for p in posts if p["created_at"]), default=None),
+                "first_post_utc": min(filter(None, map(post_time, posts)), default=None),
                 "posts_spend": x_spend, "by_platform": {pl: sum(cost(p) for p in posts if (p["platform"] or "x") == pl)
                                                         for pl in sorted({p["platform"] or "x" for p in posts})},
                 "other_spend": camp["other_spend"] or 0, "total_budget": total,
