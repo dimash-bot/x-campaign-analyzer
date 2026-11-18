@@ -152,6 +152,8 @@ select.paid { font-size: 12px; padding: 2px 4px; border-radius: 6px; border: 1px
 select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--border)); font-weight: 600; }
 .auto { display: block; font-size: 10.5px; color: var(--muted); }
 /* Integrations dashboard: one card per influencer we've paid to post */
+.dash-filters { margin: 10px 0 0; gap: 6px; }
+.dash-filters select, .dash-filters input[type=search] { font-size: 12.5px; padding: 5px 8px; }
 .dash-head { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; margin-bottom: 4px; }
 .dash-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin: 10px 0 14px; }
 .dash-kpis .kpi { background: var(--surface-2); border: none; padding: 9px 12px; }
@@ -198,7 +200,7 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
   <div class="notice" id="loginNotice" hidden>
     <b>Median views and their normal ER need a logged-in X session.</b> Followers come from X anyway. To fill the rest, set the
     <code>X_AUTH_TOKEN</code> and <code>X_CT0</code> cookies of a spare X account, or set <code>APIFY_TOKEN</code> to pull their last
-    20 posts through Apify (~$0.02 per account). You can also paste links to their recent posts with ✎ next to the quality badge.
+    100 posts through Apify (~$0.04 per account). You can also paste links to their recent posts with ✎ next to the quality badge.
   </div>
 
   <section class="card" id="dash">
@@ -213,7 +215,19 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
         </select>
       </div>
     </div>
-    <p class="sub" style="margin:0">Every influencer we've paid to post, and how their posts with us did. Follows the wave, platform and search filters below; bars are each post's views (dashed line = their usual median). Click a bar to open the post.</p>
+    <p class="sub" style="margin:0">Every influencer we've paid to post, and how their posts with us did. Bars are each post's views (dashed line = their usual median); click a bar to open the post.</p>
+    <div class="row dash-filters">
+      <input id="dQ" type="search" placeholder="Search name or @handle" style="min-width:180px">
+      <select id="dWave" title="Only posts in this wave"><option value="">All waves</option></select>
+      <select id="dPeriod" title="Only posts from this period">
+        <option value="">Any time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
+      </select>
+      <select id="dPlat"><option value="">All platforms</option><option value="x">X</option><option value="linkedin">LinkedIn</option><option value="other">Other</option></select>
+      <select id="dQual" title="Account quality"><option value="">Any quality</option><option value="good">Good</option><option value="test">Test</option><option value="bad">Bad</option><option value="partial">Profile only</option></select>
+      <select id="dBeat" title="Our post vs their usual post"><option value="">Beat median: any</option><option value="yes">Beat their median</option><option value="no">Below their median</option></select>
+      <label class="muted" style="font-size:12.5px;display:flex;gap:5px;align-items:center"><input type="checkbox" id="dRepeat">Worked with more than once</label>
+      <button id="dReset" title="Clear the dashboard filters">Reset</button>
+    </div>
     <div class="dash-kpis" id="dashKpis"></div>
     <div class="icards" id="icards"></div>
     <div class="dash-more"><button id="dashMore" hidden></button></div>
@@ -261,6 +275,7 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
           <th data-sort="followers" class="colsep"><span class="grp">Profile</span>Followers</th>
           <th data-sort="median_views"><span class="grp">Their normal</span>Median views</th>
           <th data-sort="median_er"><span class="grp">Their normal</span>ER</th>
+          <th data-sort="posts_per_day" title="Average original posts a day (no replies, no reposts) over the last 20 days. * = their pull covered fewer days, so it's the rate over those"><span class="grp">Their normal</span>Posts / day</th>
           <th data-sort="posts" class="colsep"><span class="grp">With us</span>Posts</th>
           <th data-sort="paid"><span class="grp">With us</span>Paid</th>
           <th data-sort="views" title="Total views of all our paid posts with them"><span class="grp">With us</span>Views</th>
@@ -365,7 +380,8 @@ const QL = { good: "Good", test: "Test", partial: "Profile only", bad: "Bad" };
 let dashAll = false;
 try { $("dashSort").value = localStorage.getItem("xca_dsort") || "cpm"; } catch (e) {}
 function integ(c) {
-  const w = $("wave").value, I = (c.integrations || []).filter((i) => !w || w === "__prospect" || i.wave === w);
+  const w = $("dWave").value, days = Number($("dPeriod").value), since = days ? new Date(Date.now() - days * 864e5).toISOString() : "";
+  const I = (c.integrations || []).filter((i) => (!w || i.wave === w) && (!since || (i.at || "") >= since));
   if (!I.length) return null;
   const withV = I.filter((i) => i.views), sum = (L, f) => L.reduce((a, i) => a + (f(i) || 0), 0);
   const views = sum(I, (i) => i.views), spent = sum(I, (i) => i.cost), vSpent = sum(withV, (i) => i.cost), vEng = sum(withV, (i) => i.eng);
@@ -377,7 +393,14 @@ function integ(c) {
     last: I[I.length - 1].at || "" };
 }
 function renderDash() {
-  const L = visible().map(integ).filter(Boolean);
+  const q = $("dQ").value.trim().toLowerCase(), pl = $("dPlat").value, qu = $("dQual").value, bt = $("dBeat").value;
+  const L = D.creators.filter((c) => (!q || `${c.name} ${c.handle}`.toLowerCase().includes(q)) && (!pl || c.platform === pl)
+      && (!qu || (c.quality?.verdict || "partial") === qu))
+    .map(integ).filter(Boolean)
+    .filter((r) => (!bt || (ok(r.vs_median) && (bt === "yes") === (r.vs_median >= 1))) && (!$("dRepeat").checked || r.n > 1 || r.c.waves.length > 1));
+  const waves = [...new Set(D.creators.flatMap((c) => (c.integrations || []).map((i) => i.wave)).filter(Boolean))].sort();
+  const cw = $("dWave").value;
+  $("dWave").innerHTML = `<option value="">All waves</option>` + waves.map((x) => `<option ${x === cw ? "selected" : ""}>${esc(x)}</option>`).join("");
   const k = $("dashSort").value, asc = ["cpm", "cpe"].includes(k);
   L.sort((a, b) => {
     const x = a[k], y = b[k], nx = !ok(x) && typeof x !== "string", ny = !ok(y) && typeof y !== "string";
@@ -385,8 +408,8 @@ function renderDash() {
     return (typeof x === "string" ? x.localeCompare(y) : x - y) * (asc ? 1 : -1);
   });
   $("dash").hidden = !D.creators.some((c) => c.posts);
-  const w = $("wave").value;
-  $("dashScope").textContent = w && w !== "__prospect" ? `wave: ${w}` : "all waves";
+  const nf = ["dQ", "dWave", "dPeriod", "dPlat", "dQual", "dBeat"].filter((id) => $(id).value).length + ($("dRepeat").checked ? 1 : 0);
+  $("dashScope").textContent = nf ? `${nf} filter${nf === 1 ? "" : "s"} on` : "";
   const tot = (f) => L.reduce((a, r) => a + (r[f] || 0), 0);
   const all = L.flatMap((r) => r.I), wv = all.filter((i) => i.views);
   const V = tot("views"), S = tot("spent"), vS = wv.reduce((a, i) => a + i.cost, 0), vE = wv.reduce((a, i) => a + i.eng, 0);
@@ -428,6 +451,8 @@ function renderDash() {
   $("dashMore").textContent = dashAll ? "Show top 12" : `Show all ${L.length}`;
 }
 $("dashSort").addEventListener("change", () => { try { localStorage.setItem("xca_dsort", $("dashSort").value); } catch (e) {} renderDash(); });
+["dQ", "dWave", "dPeriod", "dPlat", "dQual", "dBeat", "dRepeat"].forEach((id) => $(id).addEventListener("input", () => { dashAll = false; renderDash(); }));
+$("dReset").onclick = () => { ["dQ", "dWave", "dPeriod", "dPlat", "dQual", "dBeat"].forEach((id) => { $(id).value = ""; }); $("dRepeat").checked = false; renderDash(); };
 $("dashMore").onclick = () => { dashAll = !dashAll; renderDash(); };
 
 function visible() {
@@ -447,6 +472,16 @@ function sorted(list) {
 }
 
 // A number we have, or an input to type it when X can't provide it (LinkedIn, or no X login yet)
+function ppdText(c) {
+  if (!ok(c.posts_per_day)) return null;
+  const short = ok(c.posts_per_day_days) && c.posts_per_day_days < 19.5;
+  return { v: c.posts_per_day.toFixed(c.posts_per_day < 10 ? 1 : 0) + (short ? "*" : ""),
+    tip: `${c.posts_per_day} original posts a day over the last ${short ? Math.round(c.posts_per_day_days) + " days (all their pull covered)" : "20 days"}` };
+}
+function ppdCell(c) {
+  const p = ppdText(c);
+  return p ? `<td title="${esc(p.tip)}">${p.v}</td>` : `<td class="muted">—</td>`;
+}
 function cell(c, f, fmt, cls = "") {
   if (ok(c[f])) return `<td class="${cls}">${fmt(c[f])}</td>`;
   const pend = D.pending.includes(c.key);
@@ -514,6 +549,7 @@ function render() {
       ${cell(c, "followers", fmtN, "colsep")}
       ${cell(c, "median_views", fmtN)}
       ${cell(c, "median_er", (v) => pct(v))}
+      ${ppdCell(c)}
       <td class="colsep">${c.prospect ? "—" : c.posts}</td>
       <td>${c.prospect ? "—" : fmt$(c.paid, 0)}</td>
       <td title="${c.posts > 1 ? `${c.posts} posts · avg ${fmtN(c.avg_views)} each` : ""}">${c.prospect ? "—" : fmtN(c.views)}</td>
@@ -524,7 +560,7 @@ function render() {
       <td>${fmt$(c.cpe)}</td>
       <td>${fmt$(c.price_per_1k_followers)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="20" class="empty">No influencers match.</td></tr>`;
+  }).join("") : `<tr><td colspan="21" class="empty">No influencers match.</td></tr>`;
   syncPicked();
 }
 
@@ -656,6 +692,7 @@ function tipHtml(c) {
     ["Followers", ok(c.followers) ? fmtN(c.followers) + (ok(c.following) ? ` · follows ${fmtN(c.following)}` : "") : null],
     ["Account age", days ? (days >= 365 ? (days / 365).toFixed(1) + " years" : days + " days") + (c.posts_count ? ` · ${Math.round(c.posts_count / days)} posts/day` : "") : null],
     ["Posts, last 90 days", ok(c.posts_90d) ? c.posts_90d : null],
+    ["Posts a day, last 20 days", ppdText(c)?.tip.replace(/ original posts a day over the last /, " · over ") ?? null],
     ["Their median views", ok(c.median_views) ? fmtN(c.median_views) + (c.followers ? ` (${(c.median_views / c.followers * 100).toFixed(1)}% of followers)` : "") : null],
     ["Their ER", ok(c.median_er) ? pct(c.median_er) : null],
     ["Replies per like", ok(c.reply_like) ? c.reply_like.toFixed(2) : null],

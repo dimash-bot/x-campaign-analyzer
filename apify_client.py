@@ -1,5 +1,5 @@
 """Recent posts of an X account through Apify (apidojo/tweet-scraper), for when X won't list a timeline
-without a logged-in session. Needs APIFY_TOKEN. Costs about $0.0004 per post returned (~$0.016 per account)."""
+without a logged-in session. Needs APIFY_TOKEN. Costs about $0.0004 per post returned (up to ~$0.04 per account)."""
 import os
 from datetime import datetime, timezone
 
@@ -19,12 +19,15 @@ def _iso(s):
         return ""
 
 
-def recent_posts(handle, max_items=40):
+RECENT_MAX = 100   # enough for heavy posters to reach back 20 days (posts a day); replies count toward it
+
+
+def recent_posts(handle, max_items=RECENT_MAX):
     """Newest posts by @handle, same shape as XClient.recent_posts plus is_reply / is_retweet flags.
     Reposts carry the reposted post's numbers, so callers should drop them."""
     r = requests.post(
         f"https://api.apify.com/v2/acts/{ACTOR}/run-sync-get-dataset-items",
-        params={"token": os.environ["APIFY_TOKEN"], "timeout": 180, "maxTotalChargeUsd": 0.05},
+        params={"token": os.environ["APIFY_TOKEN"], "timeout": 180, "maxTotalChargeUsd": 0.06},
         json={"twitterHandles": [handle], "maxItems": max_items, "sort": "Latest"}, timeout=200)
     if r.status_code >= 400:
         raise RuntimeError(f"Apify HTTP {r.status_code}: {r.text[:160]}")

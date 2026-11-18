@@ -168,6 +168,8 @@ def init_db():
         for col, decl in [("prospect", "INTEGER DEFAULT 0"), ("added_at", "TEXT"), ("joined", "TEXT"), ("listed", "INTEGER"),
                           ("bio", "TEXT"), ("default_avatar", "INTEGER"), ("posts_90d", "INTEGER"), ("reply_like", "REAL"),
                           ("bookmark_like", "REAL"), ("spike", "REAL"), ("boosted", "INTEGER"), ("quote_price", "REAL"),
+                          # original posts a day over the last PPD_DAYS days (ppd_days < PPD_DAYS = the pull covered less)
+                          ("ppd", "REAL"), ("ppd_days", "REAL"),
                           # bot check of their newest followers (Apify sample)
                           ("f_sample", "INTEGER"), ("f_bot", "REAL"), ("f_inactive", "REAL"), ("f_examples", "TEXT"),
                           ("f_at", "TEXT"), ("f_error", "TEXT"),
@@ -352,6 +354,7 @@ def fetch_creator(client, key, handle):
         cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()   # "their normal" = the last 3 months
         last90 = [t for t in client.recent_posts(prof["user_id"], prof["handle"]) if t["created_at"] >= cutoff]
         activity = {"posts_90d": len(last90), "reply_like": None, "bookmark_like": None, "spike": None, "boosted": None}
+        activity["ppd"], activity["ppd_days"] = posts_per_day([t["created_at"] for t in last90], None, now())
         recent = [t for t in last90 if t["tweet_id"] not in paid and t["views"]][:30]
         if len(recent) >= 3:
             eng = [t["likes"] + t["retweets"] + t["quotes"] + t["replies"] + t["bookmarks"] for t in recent]
@@ -591,6 +594,25 @@ def start_apify(key, handle, force=False):
     threading.Thread(target=apify_baseline, args=(key, handle), daemon=True).start()
 
 
+PPD_DAYS = 20   # "posts a day" window
+
+
+def posts_per_day(dates, covered_from, at):
+    """Original posts a day over the last PPD_DAYS days before `at` (ISO strings). When the pull didn't reach back
+    that far (`covered_from` newer than the cutoff), the rate is over the span it did cover. -> (rate, days) or (None, None)."""
+    if not at:
+        return None, None
+    end = datetime.fromisoformat(at)
+    start = end - timedelta(days=PPD_DAYS)
+    if covered_from and datetime.fromisoformat(covered_from) > start:
+        start = datetime.fromisoformat(covered_from)
+    days = (end - start).total_seconds() / 86400
+    if days < 1:
+        return None, None
+    n = sum(1 for d in dates if d and start <= datetime.fromisoformat(d) <= end)
+    return round(n / days, 2), round(days, 1)
+
+
 def apify_baseline(key, handle):
     """Their last ~20 original posts (no reposts, no replies) via Apify -> sample_posts -> their normal."""
     try:
@@ -598,6 +620,10 @@ def apify_baseline(key, handle):
             items = apify_client.recent_posts(handle)
         own = [t for t in items if not t["is_retweet"] and not t["is_reply"] and t["author"].lower() == handle.lower()]
         own.sort(key=lambda t: t["created_at"], reverse=True)
+        oldest_any = min((t["created_at"] for t in items if t["created_at"]), default="")
+        # a full pull (fewer items than asked for) reaches back to their first post: the whole window is covered
+        ppd, ppd_days = posts_per_day([t["created_at"] for t in own],
+                                      oldest_any if len(items) >= apify_client.RECENT_MAX else None, now())
         own = own[:20]
         cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
         oldest = min((t["created_at"] for t in items if t["created_at"]), default="")
@@ -611,8 +637,8 @@ def apify_baseline(key, handle):
                               ON CONFLICT(creator_key, tweet_id) DO UPDATE SET created_at=excluded.created_at,
                               {", ".join(f"{m}=excluded.{m}" for m in METRICS)}, fetched_at=excluded.fetched_at, error=NULL""",
                           (key, t["tweet_id"], t["url"], t["created_at"], *[t[m] for m in METRICS], now()))
-            c.execute("UPDATE creators SET posts_90d=?, error=? WHERE key=?",
-                      (posts_90d, None if own else "Apify found no original posts", key))
+            c.execute("UPDATE creators SET posts_90d=?, ppd=?, ppd_days=?, error=? WHERE key=?",
+                      (posts_90d, ppd, ppd_days, None if own else "Apify found no original posts", key))
         sample_baseline(key)
     except Exception as e:  # noqa: BLE001 — show it on the creator row
         print(f"apify {handle} failed: {e}", flush=True)
@@ -799,6 +825,21 @@ def add_samples(key, text, price=None):
     return {"posts": len(ids)}
 
 
+def sample_ppd():
+    """Posts a day for creators pulled through Apify before ppd was stored: from the (up to 20) originals kept in
+    sample_posts, counted back from that pull. The pull's real reach isn't known, so if the oldest kept post is inside
+    the window the rate is over the span from it (an estimate; the next Apify pull stores the exact one)."""
+    by = collections.defaultdict(list)
+    with db() as c:
+        for r in c.execute("SELECT creator_key, created_at, fetched_at FROM sample_posts WHERE source='apify' AND created_at"):
+            by[r[0]].append((r[1], r[2]))
+    out = {}
+    for k, L in by.items():
+        dates = [d for d, _ in L]
+        out[k] = posts_per_day(dates, min(dates), max(f for _, f in L if f) if any(f for _, f in L) else None)
+    return out
+
+
 def sample_counts():
     with db() as c:
         return {r[0]: {"n": r[1], "ok": r[2], "bad": r[3]} for r in c.execute(
@@ -962,6 +1003,7 @@ def creators_view(enqueue_stale=True):
         prof = {r["key"]: dict(r) for r in c.execute("SELECT * FROM creators")}
         posts = [dict(r) for r in c.execute(f"SELECT * FROM posts WHERE author IS NOT NULL AND author != '' AND {INCLUDED}")]
     samples = sample_counts()
+    ppd_est = sample_ppd()
     rows, stale = {}, []
     for p in posts:
         k = creator_key(p["platform"], p["author"])
@@ -998,6 +1040,7 @@ def creators_view(enqueue_stale=True):
         er_pct, cpm = r2(dv(r["eng_v"] * 100, r["views"])), r2(dv(r["spend_v"] * 1000, r["views"]))
         vs_median = r2(dv(avg_views, pr.get("median_views")) if avg_views else None)
         expected_cpm = r2(dv(pr["quote_price"] * 1000, pr.get("median_views"))) if pr.get("quote_price") else None
+        ppd, ppd_days = (pr["ppd"], pr.get("ppd_days")) if pr.get("ppd") is not None else ppd_est.get(k, (None, None))
         err = pr.get("error")
         if err and pr.get("median_views") is not None and err.startswith("median views need"):
             err = None   # their normal came from pasted posts
@@ -1012,6 +1055,7 @@ def creators_view(enqueue_stale=True):
             "followers_sample": pr.get("f_sample"), "bot_examples": json.loads(pr["f_examples"]) if pr.get("f_examples") else [],
             "followers_checked_at": pr.get("f_at"), "followers_error": pr.get("f_error"),
             "following": pr.get("following"), "posts_count": pr.get("posts_count"), "joined": pr.get("joined"), "bio": pr.get("bio"), "posts_90d": pr.get("posts_90d"),
+            "posts_per_day": ppd, "posts_per_day_days": ppd_days,
             "reply_like": pr.get("reply_like"), "bookmark_like": pr.get("bookmark_like"),
             # when they joined our list: added by hand to vet, else their first post for us
             "added_at": pr.get("added_at") or r.get("first_post"),

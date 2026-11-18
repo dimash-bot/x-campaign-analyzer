@@ -79,7 +79,7 @@ python3 server.py            # http://localhost:8787 — login is off unless GOO
 | `RESEND_WEBHOOK_SECRET` | optional — signing secret (`whsec_…`) of a Resend webhook pointed at `https://<domain>/webhooks/resend` (live opens, clicks, bounces) |
 | `OUTREACH_USERS` | optional — who may open the Outreach tab and send DMs, default `dimash@nace.ai,altynay@nace.ai,maiya@nace.ai` |
 | `X_CLIENT_ID`, `X_CLIENT_SECRET` | optional — X API app (OAuth 2.0) for the Outreach tab; without them it runs in prototype mode (demo account + send by hand) |
-| `APIFY_TOKEN` | optional — pulls each creator's last ~20 posts via Apify (`apidojo/tweet-scraper`, ~$0.02/account, at most every 3 days) so Influencers can rate accounts we haven't paid yet without an X login |
+| `APIFY_TOKEN` | optional — pulls each creator's last ~100 posts via Apify (`apidojo/tweet-scraper`, ~$0.04/account; their normal uses the newest 20 originals, posts / day the last 20 days, at most every 3 days) so Influencers can rate accounts we haven't paid yet without an X login |
 
 6. Bring existing data over: in the **local** app click **Backup** (downloads a consistent snapshot — don't
    copy `campaigns.db` directly, recent edits may still sit in `campaigns.db-wal`), then open the Railway URL,
