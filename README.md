@@ -81,6 +81,11 @@ python3 server.py            # http://localhost:8787 — login is off unless GOO
 | `X_CLIENT_ID`, `X_CLIENT_SECRET` | optional — X API app (OAuth 2.0) for the Outreach tab; without them it runs in prototype mode (demo account + send by hand) |
 | `APIFY_TOKEN` | optional — pulls each creator's last ~100 posts via Apify (`apidojo/tweet-scraper`, ~$0.04/account; their normal uses the newest 20 originals, posts / day the last 20 days, at most every 3 days) so Influencers can rate accounts we haven't paid yet without an X login |
 
+| `DREX_API_KEY` | optional — Drex (console.nace.ai) key; with `APIFY_TOKEN` it turns on the **full filter list + Collab score** on Influencers (see below) |
+| `VET_TTL_DAYS` / `VET_TZ` / `VET_DAYS` | optional — re-vet each creator at most every N days (default `14`); time zone that defines a day (default `Asia/Tokyo`); window length (default `20`) |
+| `VET_BLACK_LIST` | optional — comma-separated X handles: an influencer on it = decision No; a commenter on it counts as a bot |
+| `VET_COMPETITORS` / `VET_YES` / `VET_MAYBE` | optional — competitor names Drex checks bios against (default: LLM routers / AI gateways); score cutoffs (default `65` / `58`) |
+
 6. Bring existing data over: in the **local** app click **Backup** (downloads a consistent snapshot — don't
    copy `campaigns.db` directly, recent edits may still sit in `campaigns.db-wal`), then open the Railway URL,
    sign in, click **Restore** and upload that file.
@@ -106,6 +111,18 @@ deleted with it). The old Wave builder page (`/builder`) now redirects to Waves.
 Everyone who has a post in a wave is in its influencer list automatically (our own `OWN_HANDLES` aside), with what we
 paid per post there; a new author gets their profile, normal views and follower check pulled into Influencers as soon as
 their post is fetched.
+
+**Filters + Collab score** (Influencers, `vetting.py`): every X creator gets the full filter list as columns —
+general (followers, bio analysis, black list, competitor), last 20 days (posts, avg / day, avg and median per active day,
+Paid partnership ratio and per day, burstiness), last 20 posts (total / median / avg views and likes, topic relevance,
+who comments, real vs bot commenters, comment context, views ÷ followers, likes ÷ views, paid vs other views) and past
+experience (amount paid, our views ÷ their median, our likes ÷ views, CPM, relevant comments and quotes / reposts of our
+post, work again yes / no — set by hand). Data comes from the Apify actor `xquik/x-tweet-scraper` (it sees X's "Paid
+partnership" label; `apidojo` doesn't) and judgments from Drex (bio, competitor, topic of each post, each commenter's
+profile, each reply). **Collab score** weighs every filter (weights in `vetting.py`, filters without data are skipped);
+hard rules first: bio clearly unrelated, competitor, black list or "work again: no" = No. ≥ 65 Yes, ≥ 58 Maybe.
+Runs for each new creator, then every `VET_TTL_DAYS`; **Re-analyze selected** forces it. Cost ≈ $0.05–0.30 Apify per
+creator (heavy posters more) + a fraction of a cent of Drex.
 
 **Outreach**: tick Outreached and type which of our X accounts contacted them (shown with a link to that account, on
 Influencers and the wave's influencer list). **Paid** column: automatic once

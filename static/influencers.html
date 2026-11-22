@@ -270,6 +270,7 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
           <th class="l" data-sort="paid_status" title="Have we paid them? Automatic once they have a paid post with us; change it by hand any time">Paid</th>
           <th class="l" data-sort="added_at" title="When they joined our list: added by hand to vet, or their first post for us">Added</th>
           <th class="l" data-sort="qrank"><span class="grp">Account</span>Quality</th>
+          <th data-sort="collab_score" title="Final score from every filter (weights in vetting.py). Yes / Maybe / No; hover for why"><span class="grp">Final</span>Collab score</th>
           <th data-sort="bot_followers_pct" title="Share of their 200 newest followers that look like bots"><span class="grp">Account</span>Bot followers</th>
           <th data-sort="usa_pct" title="Share of their audience in the USA — type the number from their analytics / media kit"><span class="grp">Audience</span>USA %</th>
           <th data-sort="followers" class="colsep"><span class="grp">Profile</span>Followers</th>
@@ -285,6 +286,37 @@ select.paid.yes { color: var(--good); border-color: color-mix(in srgb, var(--goo
           <th data-sort="cpm" class="colsep"><span class="grp">Cost</span>CPM</th>
           <th data-sort="cpe"><span class="grp">Cost</span>CPE</th>
           <th data-sort="price_per_1k_followers"><span class="grp">Cost</span>$ / 1K followers</th>
+          <th data-sort="f_followers" class="colsep" title="Number of followers"><span class="grp">Filters · general</span>Followers</th>
+          <th data-sort="f_bio" title="Drex: is the bio clearly unrelated to tech / AI? Reject only at 95%+ certainty (keep otherwise)"><span class="grp">Filters · general</span>Bio analysis</th>
+          <th data-sort="f_black" title="On the black list (VET_BLACK_LIST)?"><span class="grp">Filters · general</span>Black list</th>
+          <th data-sort="f_comp" title="Drex: probability they work for an LLM router / AI gateway company. 50%+ = No"><span class="grp">Filters · general</span>Competitor</th>
+          <th data-sort="f_posts" class="colsep" title="Quote, thread and single posts in the last 20 full days (reposts and replies to others not counted)"><span class="grp">Filters · last 20 days</span>Posts</th>
+          <th data-sort="f_avg_day" title="Average posts per day"><span class="grp">Filters · last 20 days</span>Avg / day</th>
+          <th data-sort="f_avg_active" title="Average posts per active day (days with 0 posts not counted)"><span class="grp">Filters · last 20 days</span>Avg / active day</th>
+          <th data-sort="f_med_active" title="Median posts per active day"><span class="grp">Filters · last 20 days</span>Median / active day</th>
+          <th data-sort="f_paid_ratio" title="Share of posts with X's 'Paid partnership' label"><span class="grp">Filters · last 20 days</span>Paid ratio</th>
+          <th data-sort="f_paid_day" title="'Paid partnership' posts per day"><span class="grp">Filters · last 20 days</span>Paid / day</th>
+          <th data-sort="f_burst" title="Average distance from their daily average ÷ daily average (only meaningful at 2+ posts a day)"><span class="grp">Filters · last 20 days</span>Burstiness</th>
+          <th data-sort="f_vt" class="colsep" title="Total views of their last 20 posts"><span class="grp">Filters · last 20 posts</span>Total views</th>
+          <th data-sort="f_vm" title="Median views of their last 20 posts"><span class="grp">Filters · last 20 posts</span>Median views</th>
+          <th data-sort="f_va" title="Average views of their last 20 posts"><span class="grp">Filters · last 20 posts</span>Avg views</th>
+          <th data-sort="f_lt" title="Total likes of their last 20 posts"><span class="grp">Filters · last 20 posts</span>Total likes</th>
+          <th data-sort="f_lm" title="Median likes of their last 20 posts"><span class="grp">Filters · last 20 posts</span>Median likes</th>
+          <th data-sort="f_la" title="Average likes of their last 20 posts"><span class="grp">Filters · last 20 posts</span>Avg likes</th>
+          <th data-sort="f_topic" title="Core fit: how many of the last 20 posts are relevant to developers / AI practitioners (Drex)"><span class="grp">Filters · last 20 posts</span>Topic relevance</th>
+          <th data-sort="f_who" title="Audience quality: share of commenters in AI, dev, ML, data or security (Drex, from their profiles)"><span class="grp">Filters · last 20 posts</span>Who comments</th>
+          <th data-sort="f_real" title="Fake engagement check: share of commenters judged real, not bots (Drex, from profiles; black-listed = bot)"><span class="grp">Filters · last 20 posts</span>Real commenters</th>
+          <th data-sort="f_ctx" title="Audience quality: share of replies on topic (Drex)"><span class="grp">Filters · last 20 posts</span>Comment context</th>
+          <th data-sort="f_vpf" title="Median views ÷ followers. Low = fake or inactive followers"><span class="grp">Filters · last 20 posts</span>Views / followers</th>
+          <th data-sort="f_lpv" title="Median likes ÷ median views: do people who see the posts react?"><span class="grp">Filters · last 20 posts</span>Likes / views</th>
+          <th data-sort="f_pvo" title="Median views of their Paid partnership posts ÷ their other posts. Low = audience ignores their ads"><span class="grp">Filters · last 20 posts</span>Paid vs other views</th>
+          <th data-sort="past_paid" class="colsep" title="What we paid them in total (waves)"><span class="grp">Filters · past experience</span>Amount paid</th>
+          <th data-sort="past_vs_median" title="Views on our post ÷ their median views: did our post do as well as their usual posts?"><span class="grp">Filters · past experience</span>Ours vs their median</th>
+          <th data-sort="past_likes_per_view" title="Likes on our post ÷ views on our post"><span class="grp">Filters · past experience</span>Our likes / views</th>
+          <th data-sort="past_cpm" title="What we paid ÷ views × 1,000"><span class="grp">Filters · past experience</span>CPM</th>
+          <th data-sort="f_past_comm" title="Comments on our post from real, relevant people (Drex, from profiles)"><span class="grp">Filters · past experience</span>Relevant comments</th>
+          <th data-sort="f_past_qr" title="Quotes and reposts of our post by real, relevant accounts: extra reach we didn't pay for"><span class="grp">Filters · past experience</span>Relevant quotes & reposts</th>
+          <th data-sort="work_again" title="Work with them again? Set by hand; No = final decision No"><span class="grp">Filters · past experience</span>Work again</th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
@@ -366,7 +398,7 @@ const picked = new Set();   // creator keys ticked for deletion
 let sort = { key: "added_at", dir: "desc" };
 try { sort = JSON.parse(localStorage.getItem("xca_csort2")) || sort; } catch (e) {}
 if (sort.key === "avg_views") sort.key = "views";   // column now shows total views with us
-const LOW_FIRST = new Set(["name", "cpm", "cpe", "price_per_1k_followers"]);
+const LOW_FIRST = new Set(["name", "cpm", "cpe", "price_per_1k_followers", "f_paid_ratio", "f_paid_day", "f_burst", "f_comp", "f_bio", "past_cpm"]);
 
 async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
@@ -490,6 +522,64 @@ function cell(c, f, fmt, cls = "") {
   return `<td class="${cls}">${editable ? `<input type="number" min="0" step="any" placeholder="—" data-key="${esc(c.key)}" data-f="${f}" title="Type it in (e.g. from their analytics)">` : "—"}</td>`;
 }
 
+// ---- full filter list (vetting.py) + final collab score
+const FKEYS = { f_followers: "followers", f_bio: "bio_unrelated_p", f_comp: "competitor_p", f_posts: "posts", f_avg_day: "avg_per_day",
+  f_avg_active: "avg_per_active_day", f_med_active: "median_per_active_day", f_paid_ratio: "paid_ratio", f_paid_day: "paid_per_day",
+  f_burst: "burstiness", f_vt: "views_total", f_vm: "views_median", f_va: "views_avg", f_lt: "likes_total", f_lm: "likes_median",
+  f_la: "likes_avg", f_topic: "relevant_posts", f_who: "relevant_commenters_pct", f_real: "real_commenters_pct", f_ctx: "on_topic_pct",
+  f_vpf: "views_per_follower", f_lpv: "likes_per_view", f_pvo: "paid_vs_other", f_past_comm: "past_relevant_comments",
+  f_past_qr: "past_relevant_quotes_reposts" };
+const share = (v, d = 0) => ok(v) ? (v * 100).toFixed(d) + "%" : "—";
+function collabCell(c) {
+  if ((D.vetting_now || []).includes(c.key)) return `<td><span class="fetching">vetting…</span></td>`;
+  const k = c.collab;
+  if (!k) return `<td class="muted" title="${esc(c.filters_error || (D.vetting ? "not vetted yet" : "vetting is off: set DREX_API_KEY and APIFY_TOKEN"))}">—</td>`;
+  return `<td class="${{ Yes: "good", Maybe: "warn", No: "bad" }[k.decision]}" title="${esc(k.decision + ": " + k.reason)}"><b>${k.score.toFixed(1)}</b> · ${k.decision}</td>`;
+}
+function filterCells(c) {
+  const f = c.filters;
+  if (!f) {
+    const busy = (D.vetting_now || []).includes(c.key);
+    const msg = busy ? `<span class="fetching">vetting…</span>` : c.filters_error ? `<span class="err" title="${esc(c.filters_error)}">vetting failed ⓘ</span>` : "—";
+    return `<td class="colsep l" colspan="24">${msg}</td>` + pastCells(c, null);
+  }
+  const t = (v, tip) => `<td title="${esc(tip || "")}">${v}</td>`;
+  const bt = f.by_type || {};
+  const topics = Object.entries(f.topics || {}).map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(", ");
+  const at = c.filters_at ? new Date(c.filters_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+  return `<td class="colsep" title="vetted ${esc(at)} · ${esc(f.window || "")}">${fmtN(f.followers)}</td>`
+    + t(f.bio_decision === "reject" ? `<span class="bad">reject</span>` : "keep", `Drex: ${share(f.bio_unrelated_p)} likely clearly unrelated`)
+    + t(f.black_list ? `<span class="bad">yes</span>` : "no")
+    + `<td class="${f.competitor_p >= 0.5 ? "bad" : ""}" title="${esc(f.competitor_keywords ? "bio mentions: " + f.competitor_keywords : "")}">${share(f.competitor_p)}</td>`
+    + `<td class="colsep" title="${esc(`${bt.single || 0} single / ${bt.quote || 0} quote / ${bt.thread || 0} thread · ${f.reposts} reposts and ${f.replies_to_others} replies to others recorded, not counted`)}">${f.posts}</td>`
+    + t(ok(f.avg_per_day) ? f.avg_per_day.toFixed(2) : "—", `${f.active_days} active days of 20`)
+    + t(ok(f.avg_per_active_day) ? f.avg_per_active_day.toFixed(2) : "—")
+    + t(ok(f.median_per_active_day) ? f.median_per_active_day : "—")
+    + t(share(f.paid_ratio, 1), `${f.paid_posts} posts with the Paid partnership label`)
+    + t(ok(f.paid_per_day) ? f.paid_per_day.toFixed(2) : "—")
+    + t(ok(f.burstiness) ? f.burstiness.toFixed(2) + (f.avg_per_day < 2 ? "*" : "") : "—", f.avg_per_day < 2 ? "* under 2 posts a day: not meaningful" : f.automated ? "automated posting pattern" : "")
+    + `<td class="colsep" title="${esc(f.last20_in_window < f.last20_n ? `last ${f.last20_n} posts reach back before the 20-day window` : "")}">${fmtN(f.views_total)}</td>`
+    + t(fmtN(f.views_median)) + t(fmtN(f.views_avg)) + t(fmtN(f.likes_total)) + t(fmtN(f.likes_median)) + t(fmtN(f.likes_avg))
+    + t(`${f.relevant_posts} / ${f.last20_n || 20}`, topics)
+    + t(share(f.relevant_commenters_pct), `${f.commenters} commenters`)
+    + t(share(f.real_commenters_pct), `${f.commenters} commenters${f.blacklisted_commenters ? ` · ${f.blacklisted_commenters} on the black list` : ""}`)
+    + t(share(f.on_topic_pct), `${f.replies_scraped} replies`)
+    + t(share(f.views_per_follower, 1)) + t(share(f.likes_per_view, 2))
+    + t(ok(f.paid_vs_other) ? f.paid_vs_other.toFixed(2) + "×" : "—", ok(f.paid_vs_other) ? "" : "no paid posts among the last 20")
+    + pastCells(c, f);
+}
+function pastCells(c, f) {
+  const sel = `<select class="paid" data-again="${esc(c.key)}" title="Work with them again? No = final decision No">
+      <option value="" ${!c.work_again ? "selected" : ""}>—</option><option value="yes" ${c.work_again === "yes" ? "selected" : ""}>Yes</option><option value="no" ${c.work_again === "no" ? "selected" : ""}>No</option></select>`;
+  return `<td class="colsep">${c.past_paid ? fmt$(c.past_paid, 0) : "—"}</td>`
+    + `<td>${ok(c.past_vs_median) ? c.past_vs_median.toFixed(2) + "×" : "—"}</td>`
+    + `<td>${share(c.past_likes_per_view, 2)}</td>`
+    + `<td>${fmt$(c.past_cpm)}</td>`
+    + `<td>${f && ok(f.past_relevant_comments) ? f.past_relevant_comments : "—"}</td>`
+    + `<td>${f && ok(f.past_relevant_quotes_reposts) ? f.past_relevant_quotes_reposts : "—"}</td>`
+    + `<td>${sel}</td>`;
+}
+
 function render() {
   const W = [...new Set(D.creators.flatMap((c) => c.waves))].sort();
   const cur = waveWanted && D.creators.some((c) => c.prospect) ? waveWanted : $("wave").value;
@@ -544,6 +634,7 @@ function render() {
         : `<span class="pill ${q.verdict}" tabindex="0" data-tip="${esc(c.key)}">${{ good: "Good", test: "Test", bad: "Bad", partial: "Profile only" }[q.verdict]}${q.manual ? " · by hand" : reasons.length ? ` · ${reasons.length}` : ""}</span>`
           + `<button class="x" title="Set quality by hand${c.platform === "x" ? " / quoted price / their post links" : ""}" data-check="${esc(c.key)}">✎</button>`
           + (why ? `<span class="why" data-tip="${esc(c.key)}">${esc(why)}</span>` : "")}</td>
+      ${collabCell(c)}
       <td data-tip="${esc(c.key)}" class="${c.bot_followers_pct > 50 ? "bad" : c.bot_followers_pct > 40 ? "warn" : ""}">${ok(c.bot_followers_pct) ? c.bot_followers_pct.toFixed(0) + "%" : c.followers_error ? `<span class="err" title="${esc(c.followers_error)}">—</span>` : "—"}</td>
       <td><input class="usa" type="number" min="0" max="100" step="any" placeholder="—" value="${ok(c.usa_pct) ? c.usa_pct : ""}" data-key="${esc(c.key)}" data-f="usa_pct" title="% of their audience in the USA"></td>
       ${cell(c, "followers", fmtN, "colsep")}
@@ -559,8 +650,9 @@ function render() {
       <td class="colsep">${fmt$(c.cpm)}</td>
       <td>${fmt$(c.cpe)}</td>
       <td>${fmt$(c.price_per_1k_followers)}</td>
+      ${filterCells(c)}
     </tr>`;
-  }).join("") : `<tr><td colspan="21" class="empty">No influencers match.</td></tr>`;
+  }).join("") : `<tr><td colspan="53" class="empty">No influencers match.</td></tr>`;
   syncPicked();
 }
 
@@ -570,7 +662,12 @@ async function load() {
   try {
     D = await api("/api/creators");
     ACCTS = D.accounts || [];
-    for (const c of D.creators) c.qrank = { good: 3, test: 2, partial: 1, bad: 0 }[c.quality?.verdict] ?? 1;
+    for (const c of D.creators) {
+      c.qrank = { good: 3, test: 2, partial: 1, bad: 0 }[c.quality?.verdict] ?? 1;
+      c.collab_score = c.collab ? c.collab.score : null;
+      for (const [k, f] of Object.entries(FKEYS)) c[k] = c.filters ? c.filters[f] : null;
+      c.f_black = c.filters ? (c.filters.black_list ? 1 : 0) : null;
+    }
     if (!editing()) render();
   } catch (e) {}
   timer = setTimeout(load, D.pending.length || editing() ? 3000 : 30000);
@@ -592,6 +689,11 @@ $("chips").addEventListener("click", (e) => {
 ["q", "wave", "plat", "out", "paidF"].forEach((id) => $(id).addEventListener("input", render));
 // Outreach tick box: saved right away, remembers who ticked it and when
 $("rows").addEventListener("change", async (e) => {
+  const ag = e.target.closest("select[data-again]");
+  if (ag) {
+    try { await api("/api/creators/work_again", { key: ag.dataset.again, value: ag.value || null }); } catch (err) { alert(err.message || err); }
+    ag.blur(); return load();
+  }
   const cb = e.target.closest("input[data-out]"); if (!cb) return;
   const c = D.creators.find((x) => x.key === cb.dataset.out);
   try {

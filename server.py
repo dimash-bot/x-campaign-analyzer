@@ -50,6 +50,7 @@ import x_dm
 import mcp_server
 import platforms
 import resend_client
+import vetting
 import postmaster
 from x_client import NeedsLogin, XClient, tweet_id_from
 import statistics
@@ -180,7 +181,10 @@ def init_db():
                           ("outreach_from", "TEXT"),   # our X account the last message went from
                           # paid / not paid set by hand (NULL = automatic: paid once they have a paid post with us)
                           ("paid_status", "TEXT"), ("paid_status_by", "TEXT"), ("paid_status_at", "TEXT"),
-                          ("usa_pct", "REAL")]:   # audience demographics typed by hand: % of their audience in the USA
+                          ("usa_pct", "REAL"),
+                          # full filter list + collab score inputs (vetting.py): JSON of every filter, when, last error
+                          ("vet", "TEXT"), ("vet_at", "TEXT"), ("vet_error", "TEXT"),
+                          ("work_again", "TEXT")]:   # past experience, set by hand: yes / no (NULL = not decided)   # audience demographics typed by hand: % of their audience in the USA
             add_col("creators", col, decl)
         # Their own recent posts, pasted as links when X won't list the timeline (no login). Read like wave posts.
         c.execute("""CREATE TABLE IF NOT EXISTS sample_posts (
@@ -321,6 +325,8 @@ FOLLOWERS_TTL_H = 24 * 14   # re-check their newest followers every 2 weeks
 FOLLOWER_SAMPLE = 200
 _apify_busy = set()         # creator keys with an Apify pull in flight, shown as "analyzing…"
 _apify_slots = threading.Semaphore(3)
+_vet_busy = set()           # creator keys with a vetting run in flight (vetting.py: xquik + Drex)
+_vet_slots = threading.Semaphore(2)
 
 
 def creator_key(platform, author):
@@ -381,6 +387,8 @@ def fetch_creator(client, key, handle):
             start_apify(key, prof["handle"])
     if apify_client.enabled():
         start_followers(key, prof["handle"])
+    if vetting.enabled():
+        start_vet(key, prof["handle"])
     with _db_lock, db() as c:
         c.execute("""INSERT INTO creators(key, platform, handle) VALUES (?, 'x', ?) ON CONFLICT(key) DO NOTHING""", (key, prof["handle"]))
         c.execute("""UPDATE creators SET handle=?, name=?, user_id=?, avatar=?, followers=?, following=?, posts_count=?,
@@ -717,6 +725,49 @@ def start_followers(key, handle, force=False):
     threading.Thread(target=follower_check, args=(key, handle), daemon=True).start()
 
 
+def start_vet(key, handle, force=False):
+    """Run the full filter list (vetting.py) in the background, unless it ran within VET_TTL_DAYS."""
+    with db() as c:
+        row = c.execute("SELECT vet_at FROM creators WHERE key=?", (key,)).fetchone()
+    if not force and row and row["vet_at"] and \
+            (datetime.now(timezone.utc) - datetime.fromisoformat(row["vet_at"])).total_seconds() < vetting.TTL_DAYS * 86400:
+        return
+    with _pending_lock:
+        if key in _vet_busy:
+            return
+        _vet_busy.add(key)
+    threading.Thread(target=run_vet, args=(key, handle), daemon=True).start()
+
+
+def run_vet(key, handle):
+    try:
+        with _vet_slots:
+            with db() as c:
+                pr = c.execute("SELECT followers, bio, name FROM creators WHERE key=?", (key,)).fetchone()
+                paid = [r[0] for r in c.execute(
+                    f"SELECT tweet_id FROM posts WHERE lower(author)=lower(?) AND COALESCE(platform,'x')='x' AND {INCLUDED} "
+                    "ORDER BY created_at DESC", (handle,))]
+            profile = {"followers": pr["followers"], "description": pr["bio"], "name": pr["name"]} if pr else None
+            v = vetting.vet(handle, profile, paid)
+        with _db_lock, db() as c:
+            c.execute("UPDATE creators SET vet=?, vet_at=?, vet_error=NULL WHERE key=?", (json.dumps(v), now(), key))
+    except Exception as e:  # noqa: BLE001 — shown on the creator row
+        print(f"vet {handle} failed: {e}", flush=True)
+        with _db_lock, db() as c:
+            c.execute("UPDATE creators SET vet_error=? WHERE key=?", (str(e)[:200], key))
+    finally:
+        with _pending_lock:
+            _vet_busy.discard(key)
+
+
+def set_work_again(key, value, email):
+    if value not in ("yes", "no", None, ""):
+        raise ValueError("work again: yes, no or empty")
+    with _db_lock, db() as c:
+        c.execute("UPDATE creators SET work_again=? WHERE key=?", (value or None, key))
+    return {"key": key, "work_again": value or None}
+
+
 REANALYZE_MAX = 100
 
 
@@ -739,7 +790,9 @@ def reanalyze_creators(keys):
         if apify:
             start_apify(k, h, force=True)
             start_followers(k, h, force=True)
-    return {"queued": len(keys), "apify": apify}
+        if vetting.enabled():
+            start_vet(k, h, force=True)
+    return {"queued": len(keys), "apify": apify, "vetting": vetting.enabled()}
 
 
 def backfill_creators():
@@ -753,6 +806,8 @@ def backfill_creators():
             start_apify(r["key"], r["handle"])
         if r["bot_followers_pct"] is None:
             start_followers(r["key"], r["handle"])
+        if vetting.enabled() and r["filters"] is None:
+            start_vet(r["key"], r["handle"])
 
 
 STATUS_RE = re.compile(r"(?:x|twitter)\.com/([A-Za-z0-9_]+)/status(?:es)?/(\d+)")
@@ -1041,6 +1096,11 @@ def creators_view(enqueue_stale=True):
         vs_median = r2(dv(avg_views, pr.get("median_views")) if avg_views else None)
         expected_cpm = r2(dv(pr["quote_price"] * 1000, pr.get("median_views"))) if pr.get("quote_price") else None
         ppd, ppd_days = (pr["ppd"], pr.get("ppd_days")) if pr.get("ppd") is not None else ppd_est.get(k, (None, None))
+        vet = json.loads(pr["vet"]) if pr.get("vet") else None
+        if vs_median is None and vet and avg_views and vet.get("views_median"):   # app has no normal yet: use the vetting median
+            vs_median = r2(avg_views / vet["views_median"])
+        past = {"vs_median": vs_median, "likes_per_view": r2(dv(r["likes_v"], r["views"]), 4) if r["views"] else None,
+                "cpm": cpm, "work_again": pr.get("work_again")}
         err = pr.get("error")
         if err and pr.get("median_views") is not None and err.startswith("median views need"):
             err = None   # their normal came from pasted posts
@@ -1075,6 +1135,11 @@ def creators_view(enqueue_stale=True):
             "quality": creator_quality(pr, er_pct, dv(r["replies_v"], r["likes_v"]), cpm, vs_median, expected_cpm),
             "post_urls": r["post_urls"],
             "integrations": sorted(r.get("items", []), key=lambda i: i["at"] or ""),   # each paid post, oldest first
+            # the full filter list (vetting.py) + past experience with us + the final score
+            "filters": vet, "filters_at": pr.get("vet_at"), "filters_error": pr.get("vet_error"),
+            "past_paid": r["paid"] or None, "past_vs_median": past["vs_median"], "past_likes_per_view": past["likes_per_view"],
+            "past_cpm": past["cpm"], "work_again": pr.get("work_again"),
+            "collab": vetting.collab_score(vet, past) if vet else None,
         })
         fresh = pr.get("profile_at") and (datetime.now(timezone.utc) - datetime.fromisoformat(pr["profile_at"])).total_seconds() < CREATOR_TTL_H * 3600
         if r["platform"] == "x" and not fresh:
@@ -1086,10 +1151,11 @@ def creators_view(enqueue_stale=True):
         busy = {p.split(":", 1)[1].rsplit(":", 1)[0] for p in _pending if isinstance(p, str) and p.startswith("s:")}
         pend = [r["key"] for r in out if r["key"] in _pending or r["key"] in busy or r["key"] in _apify_busy
                 or "f:" + r["key"] in _apify_busy]
+        vetting_now = [r["key"] for r in out if r["key"] in _vet_busy]
     with db() as c:
         accounts = outreach_accounts(c)
     return {"creators": out, "accounts": accounts, "pending": pend, "x_login": bool(os.environ.get("X_AUTH_TOKEN") and os.environ.get("X_CT0")),
-            "apify": apify_client.enabled()}
+            "apify": apify_client.enabled(), "vetting": vetting.enabled(), "vetting_now": vetting_now}
 
 
 HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
@@ -2620,6 +2686,12 @@ class Handler(BaseHTTPRequestHandler):
             if not keys:
                 return self._send(400, {"error": "no creators given"})
             return self._send(200, delete_creators(keys))
+        if path == "/api/creators/work_again":
+            b = json.loads(self._body_bytes() or b"{}")
+            try:
+                return self._send(200, set_work_again(b.get("key"), b.get("value"), user.get("email")))
+            except (ValueError, TypeError) as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/creators/reanalyze":
             b = json.loads(self._body_bytes() or b"{}")
             try:
